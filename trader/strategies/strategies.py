@@ -225,14 +225,13 @@ class GridStrategy(BaseStrategy):
 
 def get_strategy(strategy_name: str, config: Dict) -> BaseStrategy:
     """Get strategy instance"""
-    # Import low-frequency strategies
     try:
         from trader.strategies.trend_follow_strategies import TrendFollowingStrategy
     except ImportError:
         pass
     
     try:
-        from test_strategy import TestStrategy
+        from trader.strategies.test_strategy import TestStrategy
     except ImportError:
         pass
     

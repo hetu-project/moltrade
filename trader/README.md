@@ -1,119 +1,79 @@
-# Hyperliquid Trading Bot
+# Moltrade Trading Bot
+
+Hyperliquid by default, but the bot is built to support additional venues (e.g., Polymarket or other DEXs) via the exchange factory.
 
 ## Features
 
-- Supports multiple trading strategies (mean reversion, momentum, grid)
-- Risk management (stop-loss, position sizing)
-- Real-time market data monitoring
-- Trade logging
-- Test mode support
-- 📱 **Telegram Real-Time Notifications** (New!)
+- Multi-strategy: momentum, mean reversion, grid (plus pluggable strategies)
+- Multi-venue ready: exchange factory defaults to Hyperliquid, can extend via `trader/exchanges/`
+- Risk controls: stop-loss/take-profit, position sizing, trade cooldowns
+- Notifications: Telegram, optional encrypted Nostr signal broadcast
+- Test mode for dry runs; trade logging and history
 
-## Install Dependencies
+## Install
 
 ```bash
-cd strategy
+cd trader
 pip install -r requirements.txt
 ```
 
-## Configuration
+## Configure
 
-Copy `config.example.json` to `config.json` and fill in your API keys:
+1. Copy the example:
 
-```json
-{
-  "wallet_address": "your_wallet_address",
-  "private_key": "your_private_key"
-}
+```bash
+cp config.example.json config.json
 ```
 
-### Configure Telegram Notifications (Optional)
+2. Edit `config.json`:
+
+- `trading.exchange`: `hyperliquid` (default) or another key you add in `exchanges/factory.py`
+- `wallet_address`, `private_key`: required for Hyperliquid (keep safe)
+- `trading.default_strategy`, `position_size`, stops
+- Optional: `telegram` block for alerts; `nostr` block for encrypted signal broadcast
+
+### Telegram (optional)
 
 ```bash
 python3 telegram_setup.py
 ```
 
-Follow the prompts to configure automatically. For detailed instructions, see [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md).
+Follow prompts; see TELEGRAM_SETUP.md for details.
 
 ## Run
 
 ```bash
 # Test mode (no real trades)
-python main.py --test
+python main.py --config config.json --test --strategy momentum --symbol HYPE
 
-# Live trading
-python main.py --strategy momentum --symbol HYPE
+# Live trading (be sure keys/risks are set)
+python main.py --config config.json --strategy momentum --symbol HYPE
 ```
 
-## Strategy Descriptions
+## Backtest
 
-### 1. Mean Reversion Strategy (mean_reversion)
+```bash
+python backtest.py --config config.example.json --strategy momentum --symbol HYPE --interval 1h --limit 500
+```
 
-- Based on Bollinger Bands
-- Buy when the price touches the lower band, sell when it touches the upper band
-- Suitable for range-bound markets
+## Strategies (built-in)
 
-### 2. Momentum Strategy (momentum)
+- Mean Reversion (`mean_reversion`): Bollinger Bands based
+- Momentum (`momentum`): RSI + MACD
+- Grid (`grid`): laddered buy/sell bands
 
-- Uses RSI and MACD indicators
-- Buy when oversold, sell when overbought
-- Suitable for trending markets
+To add your own, see `strategies/INTEGRATION.md` and register it in `get_strategy`.
 
-### 3. Grid Trading Strategy (grid)
+## Exchanges
 
-- Sets multiple buy and sell levels within a price range
-- Buy low, sell high, and earn the spread
-- Suitable for sideways markets
+- Default: Hyperliquid (wallet address + private key)
+- Extend: add an adapter in `exchanges/` implementing `get_candles`, `get_balance`, `get_positions`, `place_order`, then register in `exchanges/factory.py` and set `trading.exchange` in config.
+
+## Nostr Signals (optional)
+
+- Requires `nostr` config (`nsec`, `platform_shared_key`, `relays`).
+- Bot broadcasts encrypted trade signals and execution reports via `SignalBroadcaster` (already wired in `main.py`).
 
 ## Risk Warning
 
-⚠️ Cryptocurrency trading carries risks and may result in financial loss. Please use cautiously and test with small amounts first.
-
-Quick Start Guide
-
-1️⃣ Configure the Bot
-cd strategy
-
-# Copy the configuration file
-
-cp config.example.json config.json
-
-# Edit the configuration (fill in your Hyperliquid wallet address and private key)
-
-nano config.json
-
-Important Configuration Items:
-
-• wallet_address: Your wallet address
-• private_key: Your private key (⚠️ Keep it safe)
-• position_size: The percentage of funds used per trade (default 10%)
-• stop_loss_percent: Stop-loss percentage (default 2%)
-• take_profit_percent: Take-profit percentage (default 5%)
-
-2️⃣ Test the Strategy (Recommended First Step)
-
-# Use the quick start script
-
-./start.sh
-
-# Choose option 1 (test mode) or 2 (backtest mode)
-
-# Or run backtest directly
-
-python3 backtest.py
-
-3️⃣ Run Live Trading
-
-# Test mode (no real trades, simulation only)
-
-python3 main.py --test --strategy momentum --symbol HYPE
-
-# Live trading (⚠️ Real funds)
-
-python3 main.py --strategy momentum --symbol HYPE --interval 60
-
-3. api_key and api_secret
-
-• Hyperliquid does not actually use these! ❌
-• Many centralized exchanges (e.g., Binance, OKX) use API Key/Secret
-• Hyperliquid is decentralized and only requires a wallet address and private key
+Crypto trading is risky. Use test mode first, start small, and never expose private keys or nsec/shared keys in logs or chat.

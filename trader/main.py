@@ -11,9 +11,10 @@ from typing import Dict, Optional
 from pathlib import Path
 
 from exchanges.factory import get_exchange_client
-from strategies import get_strategy
+from strategies.strategies import get_strategy
 from telegram_notifier import get_notifier
 from nostr.signal_service import SignalBroadcaster
+from nostr.copytrade_listener import CopyTradeListener
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +54,27 @@ class ImprovedTradingBot:
 
         # Nostr signal broadcaster
         self.signal_broadcaster = SignalBroadcaster(self.config)
+
+        # Copy-trade listener (optional)
+        self.copytrade_cfg = self.config.get('copytrade', {})
+        self.copytrade_listener = None
+        if self.copytrade_cfg.get('enabled'):
+            nostr_cfg = self.config.get('nostr', {})
+            shared_key = nostr_cfg.get('platform_shared_key')
+            nsec = nostr_cfg.get('nsec')
+            relays = nostr_cfg.get('relays', [])
+            follow_pubkeys = self.copytrade_cfg.get('follow_pubkeys', [])
+            if shared_key and nsec and relays:
+                self.copytrade_listener = CopyTradeListener(
+                    nsec=nsec,
+                    relays=relays,
+                    shared_key_hex=shared_key,
+                    allowed_pubkeys=follow_pubkeys,
+                    on_signal=self._process_copytrade_signal,
+                )
+                self.copytrade_listener.start()
+            else:
+                logger.warning("Copy-trade enabled but nostr shared key/nsec/relays missing; listener not started")
 
         logger.info(f"🤖 Trading bot initialized | Strategy: {strategy_name} | Test mode: {test_mode}")
 
@@ -398,6 +420,71 @@ class ImprovedTradingBot:
                 self.notifier.notify_error(f"Trade execution failed: {str(e)}")
             return False
 
+    # ------------------------------------------------------------------
+    # Copy-trade handling
+    # ------------------------------------------------------------------
+
+    def _process_copytrade_signal(self, payload: Dict, sender_pubkey: str):
+        """Handle incoming copy-trade signal payload and place a mirrored order."""
+        try:
+            if not self.copytrade_cfg.get('enabled'):
+                return
+
+            symbol = payload.get('symbol')
+            signal_type = payload.get('signal')
+            price = float(payload.get('price', 0) or 0)
+
+            if not symbol or signal_type not in ('buy', 'sell') or price <= 0:
+                logger.debug("Copy-trade: invalid payload %s", payload)
+                return
+
+            allowed_symbols = self.copytrade_cfg.get('symbols')
+            if allowed_symbols and symbol not in allowed_symbols:
+                logger.debug("Copy-trade: symbol %s not allowed", symbol)
+                return
+
+            size_pct = float(self.copytrade_cfg.get('size_pct', 0.05))
+            min_order_value = float(self.copytrade_cfg.get('min_order_value', 10.0))
+
+            balance = self.client.get_balance()
+            position_value = max(balance * size_pct, min_order_value)
+            trade_size = position_value / price if price > 0 else 0
+
+            if trade_size <= 0:
+                logger.debug("Copy-trade: computed size <= 0 for payload %s", payload)
+                return
+
+            logger.info(
+                "Copy-trade signal from %s | %s %s | price=%.4f | size=%.4f (value=%.2f)",
+                sender_pubkey[:12], signal_type, symbol, price, trade_size, position_value,
+            )
+
+            order = self.client.place_order(
+                symbol=symbol,
+                is_buy=signal_type == 'buy',
+                size=trade_size,
+                price=price,
+                order_type='limit',
+            )
+
+            self.trade_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'type': f'copy_{signal_type}',
+                'size': trade_size,
+                'price': price,
+                'order': order,
+                'from_pubkey': sender_pubkey,
+            })
+
+            if self.notifier and self.config.get('telegram', {}).get('notify_trades', True):
+                self.notifier.notify_trade_executed(
+                    symbol, signal_type, trade_size, price, test_mode=self.test_mode
+                )
+
+        except Exception as exc:
+            logger.warning("Copy-trade handling failed: %s", exc)
+
     def run(self, symbol: Optional[str] = None, interval: int = 300):
         """Run the trading bot (refresh interval: 5 minutes)"""
         symbol = symbol or self.config['trading']['default_symbol']
@@ -515,7 +602,7 @@ def main():
     if not strategy_name:
         with open(args.config) as f:
             config = json.load(f)
-            strategy_name = config['trading'].get('default_strategy', 'low_frequency')
+            strategy_name = config['trading'].get('default_strategy', 'test')
 
     bot = ImprovedTradingBot(config_path=args.config, test_mode=args.test, strategy_name=strategy_name)
     bot.run(symbol=args.symbol, interval=args.interval)

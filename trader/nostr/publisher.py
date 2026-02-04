@@ -2,7 +2,7 @@
 Lightweight asynchronous Nostr publisher and event listener.
 
 Usage pattern:
-    from prakasa_nostr import init_global_publisher, get_publisher
+    from nostr import init_global_publisher, get_publisher
 
     # Initialize once at startup
     init_global_publisher(privkey_nsec, relays=[...])
@@ -41,14 +41,14 @@ from pynostr.message_pool import MessagePool
 import tornado.ioloop
 from tornado import gen
 
-from parallax_utils.logging_config import get_logger
+from logging_config import get_logger
 from nostr.events import (
     TRADE_SIGNAL_KIND,
     COPYTRADE_INTENT_KIND,
     EXECUTION_REPORT_KIND,
 )
 
-logger = get_logger("prakasa_nostr.publisher")
+logger = get_logger("nostr.publisher")
 
 
 class NostrPublisher:
@@ -72,7 +72,7 @@ class NostrPublisher:
         private_key_nsec: str,
         relays: List[str],
         timeout: int = 6,
-        sid: str = "prakasa-main",
+        sid: str = "moltrade-main",
         role: str = "node",
         listen_kinds: Optional[List[int]] = None,
     ) -> None:
@@ -406,7 +406,7 @@ def init_global_publisher(
     private_key_nsec: str,
     relays: Optional[List[str]] = None,
     *,
-    sid: str = "prakasa-main",
+    sid: str = "moltrade-main",
     role: str = "node",
     listen_kinds: Optional[List[int]] = None,
 ) -> None:

@@ -15,10 +15,10 @@ from pynostr.event import Event
 
 
 # Kind reservations for trading bot events
-TRADE_SIGNAL_KIND = 20001
-COPYTRADE_INTENT_KIND = 20002
-EXECUTION_REPORT_KIND = 20003
-HEARTBEAT_KIND = 20004
+TRADE_SIGNAL_KIND = 30931
+COPYTRADE_INTENT_KIND = 30932
+EXECUTION_REPORT_KIND = 30933
+HEARTBEAT_KIND = 30934
 
 DEFAULT_VERSION = "v1"
 
@@ -41,7 +41,7 @@ class BotEvent(Event):
         version: str = DEFAULT_VERSION,
     ) -> None:
         base_tags: List[List[str]] = [
-            ["d", "bot"],
+            ["d", "subspace_op"],
             ["sid", sid],
             ["ver", version],
         ]

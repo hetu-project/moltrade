@@ -15,7 +15,7 @@
   "trading": {
     "exchange": "hyperliquid",
     "default_symbol": "HYPE",
-    "default_strategy": "low_frequency",
+    "default_strategy": "test",
     "position_size": 0.08,
     "max_position_size": 0.2,
     "stop_loss_percent": 0.03,
@@ -56,9 +56,20 @@
     "nsec": "nsec1yourprivatekey",
     "platform_shared_key": "64_hex_shared_key_from_platform",
     "relays": [
-      "wss://relay.damus.io"
+      "wss://nostr.parallel.hetu.org:8443"
     ],
-    "sid": "bot-main",
+    "sid": "subspace_op",
     "role": "bot"
+  },
+  "copytrade": {
+    "enabled": false,
+    "follow_pubkeys": [
+      "npub_of_leader"
+    ],
+    "symbols": [
+      "HYPE"
+    ],
+    "size_pct": 0.05,
+    "min_order_value": 10.0
   }
 }

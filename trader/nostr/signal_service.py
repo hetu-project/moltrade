@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 from dataclasses import asdict
 
-from nostr.crypto import GroupV1Crypto
+from nostr.crypto import Nip04Crypto
 from nostr.events import (
     TradeSignalEvent,
     CopyTradeIntentEvent,
@@ -82,7 +82,7 @@ class SignalBroadcaster:
 
     def _encrypt(self, payload: Dict[str, Any]) -> Optional[str]:
         try:
-            return GroupV1Crypto.encrypt(payload, self.shared_key)
+            return Nip04Crypto.encrypt(payload, self.shared_key)
         except Exception as exc:
             logger.warning("Failed to encrypt payload: %s", exc)
             return None
