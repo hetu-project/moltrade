@@ -5,7 +5,7 @@
 <div align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="./assets/moltrade-black.png">
-        <img src="./assets/moltrade-2.png" alt="Moltrade" width="600">
+        <img src="./assets/moltrade-white.png" alt="Moltrade" width="600">
     </picture>
 
 <div style="text-align: center; font-weight: bold;">
@@ -21,11 +21,11 @@
 
 ## **Overview**
 
-Moltrade is a decentralized, automated trading assistant that lets you run quant strategies, share encrypted signals, and allow others to copy your trades—all securely via the Nostr network. Earn reputation and credits based on your trading performance.
+**Moltrade** is a decentralized, automated trading assistant that lets you run quant strategies, share encrypted signals, and allow others to copy your trades—all securely via the Nostr network. Earn reputation and credits based on your trading performance.
 
-## Protocol Advantages
+## Core Advantages
 
-Moltrade balances security, usability, and scalability. Key advantages include:
+**Moltrade** balances security, usability, and scalability. Key advantages include:
 
 - **Client-side Key self-hosting,not cloud Custody,**: All sensitive keys and credentials remain on the user's machine; the cloud relay never holds funds or private keys, minimizing custodial risk.**No access to private keys or funds.**
 - **Encrypted, Targeted Communication**: Signals are encrypted before publishing and only decryptable by intended subscribers, preserving strategy privacy and subscriber security.
