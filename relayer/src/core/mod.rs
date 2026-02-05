@@ -1,7 +1,5 @@
 pub mod dedupe_engine;
-pub mod downstream;
 pub mod event_router;
 pub mod relay_pool;
-pub mod subscription;
 pub mod settlement_worker;
-
+pub mod subscription;

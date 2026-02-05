@@ -22,10 +22,6 @@ pub struct DeduplicationConfig {
 pub struct OutputConfig {
     pub websocket_enabled: bool,
     pub websocket_port: u16,
-    #[serde(default)]
-    pub downstream_tcp: Vec<String>,
-    #[serde(default)]
-    pub downstream_rest: Vec<String>,
     pub batch_size: usize,
     pub max_latency_ms: u64,
 }

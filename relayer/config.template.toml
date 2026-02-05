@@ -24,10 +24,6 @@ allowed_kinds = [30931, 30932, 30933, 30934]
 [output]
 websocket_enabled = false
 websocket_port = 8080
-# downstream_tcp = ["localhost:9999", "localhost:9998"]  # Optional: TCP endpoints for forwarding events (supports multiple)
-downstream_rest = [
-    "http://localhost:3000/events",
-] # Optional: REST endpoints for forwarding events (supports multiple)
 batch_size = 100
 max_latency_ms = 50
 

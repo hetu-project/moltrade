@@ -8,8 +8,8 @@ use api::{metrics::Metrics, rest_api, websocket};
 use clap::Parser;
 use config::AppConfig;
 use core::{
-    dedupe_engine::DeduplicationEngine, downstream::DownstreamForwarder, event_router::EventRouter,
-    relay_pool::RelayPool, settlement_worker::SettlementWorker, subscription::FanoutMessage,
+    dedupe_engine::DeduplicationEngine, event_router::EventRouter, relay_pool::RelayPool,
+    settlement_worker::SettlementWorker, subscription::FanoutMessage,
     subscription::SubscriptionService,
 };
 use flume::Receiver;
@@ -187,20 +187,13 @@ async fn main() -> Result<()> {
         subscription_daily_limit,
     );
 
-    // Handle downstream forwarding based on config
+    // Build HTTP server (WebSocket streaming optional)
     let websocket_enabled = cfg
         .as_ref()
         .map(|c| c.output.websocket_enabled)
         .unwrap_or(true);
 
-    let app = build_app(
-        &cfg,
-        rest_router,
-        downstream_rx,
-        fanout_rx,
-        websocket_enabled,
-        rocksdb.clone(),
-    );
+    let app = build_app(rest_router, downstream_rx, fanout_rx, websocket_enabled);
 
     // Start HTTP server
     let addr = match &cfg {
@@ -379,12 +372,10 @@ async fn init_subscription_service(
 }
 
 fn build_app(
-    cfg: &Option<AppConfig>,
     rest_router: axum::Router,
     downstream_rx: Receiver<Event>,
     fanout_rx: Option<Receiver<FanoutMessage>>,
     websocket_enabled: bool,
-    rocksdb: Arc<RocksDBStore>,
 ) -> axum::Router {
     if websocket_enabled {
         let downstream_rx_arc = Arc::new(downstream_rx);
@@ -393,35 +384,19 @@ fn build_app(
             websocket::create_websocket_router(downstream_rx_arc.clone(), fanout_rx_arc);
         axum::Router::new().merge(rest_router).merge(ws_router)
     } else {
-        let downstream_tcp = cfg
-            .as_ref()
-            .map(|c| c.output.downstream_tcp.clone())
-            .unwrap_or_default();
-        let downstream_rest = cfg
-            .as_ref()
-            .map(|c| c.output.downstream_rest.clone())
-            .unwrap_or_default();
-
-        if !downstream_tcp.is_empty() || !downstream_rest.is_empty() {
-            let forwarder = DownstreamForwarder::new(
-                downstream_tcp.clone(),
-                downstream_rest.clone(),
-                rocksdb.clone(),
-            );
-            let downstream_rx_for_forwarder = downstream_rx;
-            tokio::spawn(async move {
-                if let Err(e) = forwarder.forward_events(downstream_rx_for_forwarder).await {
-                    error!("Downstream forwarder error: {}", e);
+        let mut warned = false;
+        tokio::spawn(async move {
+            // Drain events to avoid unbounded queue growth when WebSocket streaming is disabled
+            while let Ok(_event) = downstream_rx.recv_async().await {
+                if !warned {
+                    warn!("WebSocket streaming disabled; dropping downstream events.");
+                    warned = true;
                 }
-            });
-            info!(
-                "Downstream forwarding enabled (TCP: {:?}, REST: {:?})",
-                downstream_tcp, downstream_rest
-            );
-        } else {
-            warn!(
-                "websocket_enabled is false but no downstream endpoints configured. Events will be dropped."
-            );
+            }
+        });
+
+        if let Some(rx) = fanout_rx {
+            tokio::spawn(async move { while rx.recv_async().await.is_ok() {} });
         }
 
         axum::Router::new().merge(rest_router)

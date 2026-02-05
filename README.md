@@ -104,12 +104,6 @@
 - **OpenClaw/MoltBot (Future)**: In the future, you can use OpenClaw or MoltBot as an **external advisor**. You can manually ask it to review or optimize your strategy logic, then update your bot's `config.json`. This keeps the core trading system simple and robust.
 - **Prakasa Network (Roadmap)**: For users who don't want to run their own machine, future versions could offer to host this bot on the decentralized Prakasa compute network.
 
-## **Roadmap**
-
-- **Phase 1 (Now)**: MVP as described above.
-- **Phase 2**: Integrate a simple web dashboard for strategy performance analytics and leaderboards.
-- **Phase 3**: Develop a plugin system for strategy bots and explore decentralized signal relay options.
-
 ## **Important Disclaimer**
 
 Trading cryptocurrencies and derivatives carries significant risk. Moltrade is a tool for automation and social trading. You are solely responsible for any financial losses. Past performance is not indicative of future results.
