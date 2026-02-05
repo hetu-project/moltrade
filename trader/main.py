@@ -1,14 +1,19 @@
 """
 Improved Trading Bot - Enhanced Risk Management
 """
-import json
-import time
-import pandas as pd
 import argparse
+import json
 import logging
+import os
+import secrets
+import shutil
+import time
 from datetime import datetime
-from typing import Dict, Optional
 from pathlib import Path
+from typing import Dict, Optional
+
+import pandas as pd
+import requests
 
 from exchanges.factory import get_exchange_client
 from strategies.strategies import get_strategy
@@ -85,18 +90,49 @@ class ImprovedTradingBot:
         with path.open('r') as f:
             config = json.load(f)
 
+        # Resolve secrets that may be provided via environment variables (e.g., "$PRIVATE_KEY")
+        def resolve_env_or_literal(value: Optional[str], field: str) -> Optional[str]:
+            if value and isinstance(value, str) and value.startswith('$'):
+                env_name = value[1:]
+                env_val = os.getenv(env_name)
+                if env_val:
+                    logger.info(f"Loaded {field} from env: {env_name}")
+                    return env_val
+                logger.warning(f"{field} references env {env_name} but it is not set")
+                return None
+            return value
+
+        config['private_key'] = resolve_env_or_literal(config.get('private_key'), 'private_key')
+
         # Auto-provision nostr keys and relays if missing to improve UX
         nostr_cfg = config.setdefault('nostr', {})
         updated = False
 
         nsec = nostr_cfg.get('nsec')
         relays = nostr_cfg.get('relays', [])
-        if not nsec:
+
+        def generate_keys():
             priv = PrivateKey()
             nostr_cfg['nsec'] = priv.bech32()
             nostr_cfg['npub'] = priv.public_key.bech32()
-            updated = True
             logger.info("Generated nostr keypair and wrote to config.json")
+
+        # Treat placeholder or invalid nsec as missing and auto-generate
+        if not nsec or nsec == "nsec1yourprivatekey":
+            generate_keys()
+            updated = True
+        else:
+            try:
+                PrivateKey.from_nsec(nsec)
+                # populate npub if absent
+                if not nostr_cfg.get('npub'):
+                    priv = PrivateKey.from_nsec(nsec)
+                    nostr_cfg['npub'] = priv.public_key.bech32()
+                    updated = True
+            except Exception:
+                logger.warning("Invalid nsec in config; generating a new keypair")
+                generate_keys()
+                updated = True
 
         if not relays:
             nostr_cfg['relays'] = ["wss://nostr.parallel.hetu.org:8443"]
@@ -614,6 +650,143 @@ class ImprovedTradingBot:
         logger.info("👋 Bot safely shutdown")
 
 
+def run_init(config_path: Path) -> None:
+    print("===============================================")
+    print("   Moltrade Trader Init (no trading will run)")
+    print("===============================================")
+
+    example = config_path.parent / "config.example.json"
+    if not config_path.exists():
+        if example.exists():
+            shutil.copyfile(example, config_path)
+            print(f"Copied template to {config_path} for initialization")
+        else:
+            print("config.example.json not found; cannot bootstrap config")
+            return
+
+    with config_path.open('r') as f:
+        config = json.load(f)
+
+    def prompt(msg: str, default: Optional[str] = None, allow_empty: bool = False) -> str:
+        suffix = f" [{default}]" if default is not None else ""
+        while True:
+            val = input(f"{msg}{suffix}: ").strip()
+            if val == '' and default is not None:
+                return default
+            if val == '' and allow_empty:
+                return ''
+            if val:
+                return val
+
+    # Base URL for relayer API
+    print("\n[1/5] Relayer setup")
+    base_url = prompt("Relayer base URL (for bot registration)", config.get('relayer_api', 'http://localhost:8080'))
+    config['relayer_api'] = base_url.rstrip('/')
+
+    # Wallet setup
+    print("\n[2/5] Wallet setup: choose to generate a new private key or use your own wallet.")
+    print("1) Generate new private key (recommended for testing)\n2) Use existing wallet")
+    choice = prompt("Select option", "2")
+
+    wallet_address = config.get('wallet_address', '')
+    private_key = config.get('private_key')
+
+    if choice == '1':
+        generated_pk = secrets.token_hex(32)
+        print("Generated 32-byte hex private key for you.")
+        wallet_address = prompt("Enter wallet_address (must correspond to the private key)", wallet_address or "0x...")
+        store_env = prompt("Store private key as env reference? (y/N)", "y")
+        if store_env.lower().startswith('y'):
+            env_name = prompt("Env var name for private key", "PRIVATE_KEY")
+            private_key = f"${env_name}"
+            print(f"Remember to export {env_name}={generated_pk}")
+        else:
+            private_key = generated_pk
+    else:
+        wallet_address = prompt("Enter wallet_address", wallet_address or "0x...")
+        print("Private key is sensitive; using an env var is recommended (export PRIVATE_KEY=yourkey before running the bot)")
+        store_env = prompt("Use env var for private_key? (y/N)", "y")
+        if store_env.lower().startswith('y'):
+            env_name = prompt("Env var name for private key", "PRIVATE_KEY")
+            private_key = f"${env_name}"
+            print(f"\033[91mAfter init, run: export {env_name}=<your_private_key> before starting the bot\033[0m")
+        else:
+            private_key = prompt("Enter private_key (will be stored in config)", private_key or "")
+
+    config['wallet_address'] = wallet_address
+    config['private_key'] = private_key
+
+    # Trading essentials
+    print("\n[3/5] Trading basics")
+    trading = config.setdefault('trading', {})
+    trading['exchange'] = prompt("Trading.exchange", trading.get('exchange', 'hyperliquid'))
+    trading['default_symbol'] = prompt("Trading.default_symbol", trading.get('default_symbol', 'HYPE'))
+    trading['default_strategy'] = prompt("Trading.default_strategy", trading.get('default_strategy', 'test'))
+    print("Other trading/risk fields can be adjusted later in config.json.")
+
+    # Nostr keys: generate if missing/placeholder
+    print("\n[4/5] Nostr keys")
+    nostr_cfg = config.setdefault('nostr', {})
+    nsec = nostr_cfg.get('nsec')
+    if not nsec or nsec == "nsec1yourprivatekey":
+        priv = PrivateKey()
+        nostr_cfg['nsec'] = priv.bech32()
+        nostr_cfg['npub'] = priv.public_key.bech32()
+        print("Generated Nostr nsec/npub and wrote to config.")
+    else:
+        try:
+            priv = PrivateKey.from_nsec(nsec)
+            if not nostr_cfg.get('npub'):
+                nostr_cfg['npub'] = priv.public_key.bech32()
+        except Exception:
+            priv = PrivateKey()
+            nostr_cfg['nsec'] = priv.bech32()
+            nostr_cfg['npub'] = priv.public_key.bech32()
+            print("Invalid nsec; generated a new Nostr keypair.")
+
+    # Save config after prompts
+    with config_path.open('w') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    print(f"Config saved to {config_path}.")
+
+    # Bot registration
+    print("\n[5/5] Bot registration")
+    try_register = prompt("Register bot with relayer now? (y/N)", "y")
+    if try_register.lower().startswith('y'):
+        bot_name = prompt("Bot name", "my-bot-1")
+        register_url = f"{config['relayer_api']}/api/bots/register"
+        payload = {
+            "bot_pubkey": wallet_address,
+            "nostr_pubkey": nostr_cfg.get('npub'),
+            "eth_address": wallet_address,
+            "name": bot_name,
+        }
+        try:
+            resp = requests.post(register_url, json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            print(f"Bot registration response: {data}")
+            platform_pubkey = data.get('platform_pubkey')
+            if platform_pubkey:
+                nostr_cfg['platform_shared_key'] = platform_pubkey
+                with config_path.open('w') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                    f.write('\n')
+                print("Saved platform_pubkey into nostr.platform_shared_key")
+        except Exception as exc:
+            print(f"Bot registration failed: {exc}")
+    else:
+        print("Skipped bot registration.")
+
+    print("\nInit complete. You can now run the bot normally.")
+
+
+# ---------------------------------------------------------------------------
+# CLI entrypoint
+# ---------------------------------------------------------------------------
+
+
 def main():
     parser = argparse.ArgumentParser(description='Improved Hyperliquid Trading Bot')
     parser.add_argument('--config', type=str, default='config.json', help='Config file path')
@@ -621,8 +794,13 @@ def main():
     parser.add_argument('--strategy', type=str, help='Strategy name')
     parser.add_argument('--symbol', type=str, help='Trading pair')
     parser.add_argument('--interval', type=int, default=300, help='Refresh interval (seconds)')
+    parser.add_argument('--init', action='store_true', help='Initialize config interactively (no trading)')
 
     args = parser.parse_args()
+
+    if args.init:
+        run_init(Path(args.config))
+        return
 
     strategy_name = args.strategy
     if not strategy_name:

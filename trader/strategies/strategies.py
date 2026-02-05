@@ -9,6 +9,9 @@ from ta.volatility import BollingerBands
 from typing import Dict, Optional, List
 import time
 
+from strategies.trend_follow_strategies import TrendFollowingStrategy
+from strategies.test_strategy import TestStrategy
+
 class BaseStrategy:
     """Base class for strategies"""
     def __init__(self, config: Dict):
@@ -225,16 +228,6 @@ class GridStrategy(BaseStrategy):
 
 def get_strategy(strategy_name: str, config: Dict) -> BaseStrategy:
     """Get strategy instance"""
-    try:
-        from trader.strategies.trend_follow_strategies import TrendFollowingStrategy
-    except ImportError:
-        pass
-    
-    try:
-        from trader.strategies.test_strategy import TestStrategy
-    except ImportError:
-        pass
-    
     strategies = {
         'momentum': MomentumStrategy,
         'mean_reversion': MeanReversionStrategy,
