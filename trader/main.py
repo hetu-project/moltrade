@@ -652,7 +652,7 @@ class ImprovedTradingBot:
 
 def run_init(config_path: Path) -> None:
     print("===============================================")
-    print("   Moltrade Trader Init (no trading will run)")
+    print(" 🦉 Moltrade Trader Init (no trading will run)")
     print("===============================================")
 
     example = config_path.parent / "config.example.json"
