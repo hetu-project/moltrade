@@ -11,6 +11,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from dataclasses import asdict
+import requests
 
 from nostr.crypto import Nip04Crypto
 from nostr.events import (
@@ -36,6 +37,8 @@ class SignalBroadcaster:
         self.sid = nostr_cfg.get("sid", "bot-main")
         self.role = nostr_cfg.get("role", "bot")
         self.relays = nostr_cfg.get("relays", [])
+        self.relayer_api = nostr_cfg.get("relayer_api")
+        self.settlement_token = nostr_cfg.get("settlement_token")
 
         if not self.enabled:
             logger.info("Nostr broadcasting disabled: missing nsec")
@@ -200,7 +203,55 @@ class SignalBroadcaster:
             status=status,
             test_mode=test_mode,
         )
-        return self._publish(event)
+        published = self._publish(event)
+
+        if tx_hash and self.relayer_api and self.publisher is not None:
+            self._report_trade_tx(
+                tx_hash=tx_hash,
+                symbol=symbol,
+                side=side,
+                size=size,
+                price=price,
+                role=self.role,
+            )
+
+        return published
+
+    def _report_trade_tx(
+        self,
+        *,
+        tx_hash: str,
+        symbol: str,
+        side: str,
+        size: float,
+        price: float,
+        role: str,
+        follower_pubkey: Optional[str] = None,
+    ) -> None:
+        url = f"{self.relayer_api.rstrip('/')}/api/trades/record"
+        headers = {"Content-Type": "application/json"}
+        if self.settlement_token:
+            headers["X-Settlement-Token"] = self.settlement_token
+
+        payload = {
+            "bot_pubkey": getattr(self.publisher, "public_key", None),
+            "follower_pubkey": follower_pubkey,
+            "role": role,
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "price": price,
+            "tx_hash": tx_hash,
+        }
+
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=5)
+            if resp.status_code >= 300:
+                logger.warning(
+                    "Failed to report trade tx (status=%s): %s", resp.status_code, resp.text
+                )
+        except Exception as exc:
+            logger.warning("Failed to report trade tx to relayer: %s", exc)
 
 
 __all__ = ["SignalBroadcaster"]

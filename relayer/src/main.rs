@@ -9,7 +9,8 @@ use clap::Parser;
 use config::AppConfig;
 use core::{
     dedupe_engine::DeduplicationEngine, downstream::DownstreamForwarder, event_router::EventRouter,
-    relay_pool::RelayPool, subscription::FanoutMessage, subscription::SubscriptionService,
+    relay_pool::RelayPool, settlement_worker::SettlementWorker, subscription::FanoutMessage,
+    subscription::SubscriptionService,
 };
 use flume::Receiver;
 use nostr_sdk::Event;
@@ -100,6 +101,36 @@ async fn main() -> Result<()> {
     // Optional Postgres-backed subscription service for fanout
     let subscription_service = init_subscription_service(&cfg).await?;
 
+    // Start settlement worker (Hyperliquid tx hash polling)
+    if let Some(subs) = subscription_service.clone() {
+        let settlement_cfg = cfg.as_ref().and_then(|c| c.settlement.as_ref()).cloned();
+        let base_url = settlement_cfg
+            .as_ref()
+            .map(|s| s.explorer_base.clone())
+            .unwrap_or_else(|| "https://app.hyperliquid.xyz/explorer/transaction".to_string());
+        let interval_secs: u64 = settlement_cfg.as_ref().map(|s| s.poll_secs).unwrap_or(30);
+        let batch_limit: i64 = settlement_cfg.as_ref().map(|s| s.batch_limit).unwrap_or(50);
+        let credit_cfg = settlement_cfg.as_ref().and_then(|s| s.credit.clone());
+        let worker = SettlementWorker::new(
+            subs.clone(),
+            base_url,
+            Duration::from_secs(interval_secs),
+            batch_limit,
+            credit_cfg,
+        );
+        tokio::spawn(async move { worker.run().await });
+        info!(
+            "Settlement worker started (interval={}s, batch={}, credit_cfg={})",
+            interval_secs,
+            batch_limit,
+            settlement_cfg
+                .as_ref()
+                .and_then(|c| c.credit.as_ref())
+                .map(|c| format!("leader_rate={}, follower_rate={}, min_credit={}, profit_multiplier={}, enable={}", c.leader_rate, c.follower_rate, c.min_credit, c.profit_multiplier, c.enable))
+                .unwrap_or_else(|| "disabled".to_string())
+        );
+    }
+
     if let (Some(subs), Some(pk)) = (subscription_service.as_ref(), platform_pubkey.as_ref()) {
         if let Err(e) = subs
             .ensure_platform_pubkey(pk, nostr_client.clone(), nostr_keys.as_ref())
@@ -145,6 +176,9 @@ async fn main() -> Result<()> {
         metrics.clone(),
         subscription_service.clone(),
         platform_pubkey.clone(),
+        cfg.as_ref()
+            .and_then(|c| c.settlement.as_ref())
+            .and_then(|s| s.token.clone()),
     );
 
     // Handle downstream forwarding based on config

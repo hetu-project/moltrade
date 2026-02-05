@@ -64,6 +64,66 @@ pub struct NostrConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SettlementConfig {
+    #[serde(default = "default_explorer_base")]
+    pub explorer_base: String,
+    #[serde(default = "default_poll_secs")]
+    pub poll_secs: u64,
+    #[serde(default = "default_batch_limit")]
+    pub batch_limit: i64,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub credit: Option<SettlementCreditConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettlementCreditConfig {
+    #[serde(default = "default_leader_rate")]
+    pub leader_rate: f64,
+    #[serde(default = "default_follower_rate")]
+    pub follower_rate: f64,
+    #[serde(default = "default_min_credit")]
+    pub min_credit: f64,
+    #[serde(default = "default_profit_multiplier")]
+    pub profit_multiplier: f64,
+    #[serde(default = "default_credit_enable")]
+    pub enable: bool,
+}
+
+fn default_explorer_base() -> String {
+    "https://app.hyperliquid.xyz/explorer/transaction".to_string()
+}
+
+fn default_poll_secs() -> u64 {
+    30
+}
+
+fn default_batch_limit() -> i64 {
+    50
+}
+
+fn default_leader_rate() -> f64 {
+    0.002
+}
+
+fn default_follower_rate() -> f64 {
+    0.001
+}
+
+fn default_min_credit() -> f64 {
+    0.5
+}
+
+fn default_profit_multiplier() -> f64 {
+    1.2
+}
+
+fn default_credit_enable() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub relay: RelayConfig,
     pub deduplication: DeduplicationConfig,
@@ -74,6 +134,8 @@ pub struct AppConfig {
     pub postgres: Option<PostgresConfig>,
     #[serde(default)]
     pub nostr: Option<NostrConfig>,
+    #[serde(default)]
+    pub settlement: Option<SettlementConfig>,
     pub monitoring: MonitoringConfig,
 }
 

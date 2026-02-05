@@ -3,17 +3,18 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use deadpool_postgres::{Config as PgConfig, Pool, Runtime};
 use chrono::Utc;
+use deadpool_postgres::{Config as PgConfig, Pool, Runtime};
 use nostr_sdk::prelude::{Client, EventBuilder, Keys};
 use nostr_sdk::{Event, Kind};
 use rand::RngCore;
 use rand::rng;
-use serde_json::json;
 use serde::Serialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio_postgres::{NoTls, Row};
 use std::sync::Arc;
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{NoTls, Row};
 use tracing::{info, warn};
 
 /// Row shape for subscriptions
@@ -30,6 +31,24 @@ pub struct BotRecord {
     pub eth_address: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingTrade {
+    pub tx_hash: String,
+    pub bot_pubkey: String,
+    pub follower_pubkey: Option<String>,
+    pub role: String,
+    pub size: f64,
+    pub price: f64,
+    pub pnl_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreditBalance {
+    pub bot_pubkey: String,
+    pub follower_pubkey: String,
+    pub credits: f64,
+}
+
 /// Message ready for fanout to followers over WebSocket
 #[derive(Debug, Clone, Serialize)]
 pub struct FanoutMessage {
@@ -41,7 +60,7 @@ pub struct FanoutMessage {
 }
 
 /// Service managing Postgres-backed subscriptions and fanout encryption
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SubscriptionService {
     pool: Pool,
 }
@@ -93,6 +112,29 @@ impl SubscriptionService {
                     id TEXT PRIMARY KEY,
                     pubkey TEXT NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS trade_executions (
+                    id BIGSERIAL PRIMARY KEY,
+                    bot_pubkey TEXT NOT NULL REFERENCES bots(bot_pubkey) ON DELETE CASCADE,
+                    follower_pubkey TEXT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('leader','follower')),
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    size NUMERIC NOT NULL,
+                    price NUMERIC NOT NULL,
+                    tx_hash TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    pnl NUMERIC NULL,
+                    pnl_usd NUMERIC NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS credits (
+                    bot_pubkey TEXT NOT NULL REFERENCES bots(bot_pubkey) ON DELETE CASCADE,
+                    follower_pubkey TEXT NOT NULL,
+                    credits NUMERIC NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (bot_pubkey, follower_pubkey)
                 );",
             )
             .await
@@ -258,12 +300,160 @@ impl SubscriptionService {
             if let Err(e) = client.send_event_builder(builder).await {
                 warn!("Failed to publish platform key rotation event: {}", e);
             } else {
-                info!("Published platform key rotation event for pubkey {}", current_pubkey);
+                info!(
+                    "Published platform key rotation event for pubkey {}",
+                    current_pubkey
+                );
             }
         } else {
             warn!("Platform key changed but no nostr publisher configured; skipping broadcast");
         }
 
+        Ok(())
+    }
+
+    /// Record a trade submission with tx hash for later settlement/PnL lookup
+    pub async fn record_trade_tx(
+        &self,
+        bot_pubkey: &str,
+        follower_pubkey: Option<&str>,
+        role: &str,
+        symbol: &str,
+        side: &str,
+        size: f64,
+        price: f64,
+        tx_hash: &str,
+    ) -> Result<()> {
+        let client = self.pool.get().await.context("Failed to get PG client")?;
+        client
+            .execute(
+                "INSERT INTO trade_executions (bot_pubkey, follower_pubkey, role, symbol, side, size, price, tx_hash)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (tx_hash) DO NOTHING",
+                &[&bot_pubkey, &follower_pubkey, &role, &symbol, &side, &size, &price, &tx_hash],
+            )
+            .await
+            .context("Failed to record trade tx")?;
+        Ok(())
+    }
+
+    /// Update trade settlement/PnL once the chain confirms
+    pub async fn update_trade_settlement(
+        &self,
+        tx_hash: &str,
+        status: &str,
+        pnl: Option<f64>,
+        pnl_usd: Option<f64>,
+    ) -> Result<()> {
+        let client = self.pool.get().await.context("Failed to get PG client")?;
+        client
+            .execute(
+                "UPDATE trade_executions
+                 SET status = $2,
+                     pnl = COALESCE($3, pnl),
+                     pnl_usd = COALESCE($4, pnl_usd),
+                     updated_at = now()
+                 WHERE tx_hash = $1",
+                &[&tx_hash, &status, &pnl, &pnl_usd],
+            )
+            .await
+            .context("Failed to update trade settlement")?;
+        Ok(())
+    }
+
+    pub async fn list_pending_trades(&self, limit: i64) -> Result<Vec<PendingTrade>> {
+        let client = self.pool.get().await.context("Failed to get PG client")?;
+        let rows = client
+            .query(
+                "SELECT tx_hash, bot_pubkey, follower_pubkey, role, size, price, pnl_usd
+                 FROM trade_executions
+                 WHERE status = 'pending'
+                 ORDER BY created_at ASC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await
+            .context("Failed to query pending trades")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PendingTrade {
+                tx_hash: row.get(0),
+                bot_pubkey: row.get(1),
+                follower_pubkey: row.get(2),
+                role: row.get(3),
+                size: row.get(4),
+                price: row.get(5),
+                pnl_usd: row.get(6),
+            })
+            .collect())
+    }
+
+    pub async fn list_credits(
+        &self,
+        bot_pubkey: Option<&str>,
+        follower_pubkey: Option<&str>,
+    ) -> Result<Vec<CreditBalance>> {
+        let client = self.pool.get().await.context("Failed to get PG client")?;
+
+        let mut conditions = Vec::new();
+        let mut owned_params: Vec<String> = Vec::new();
+
+        if let Some(b) = bot_pubkey {
+            owned_params.push(b.to_string());
+            conditions.push(format!("bot_pubkey = ${}", owned_params.len()));
+        }
+
+        if let Some(f) = follower_pubkey {
+            owned_params.push(f.to_string());
+            conditions.push(format!("follower_pubkey = ${}", owned_params.len()));
+        }
+
+        let mut query = "SELECT bot_pubkey, follower_pubkey, credits FROM credits".to_string();
+        if !conditions.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&conditions.join(" AND "));
+        }
+        query.push_str(" ORDER BY credits DESC");
+
+        let params: Vec<&(dyn ToSql + Sync)> = owned_params
+            .iter()
+            .map(|s| s as &(dyn ToSql + Sync))
+            .collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .context("Failed to query credits")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| CreditBalance {
+                bot_pubkey: row.get(0),
+                follower_pubkey: row.get(1),
+                credits: row.get(2),
+            })
+            .collect())
+    }
+
+    /// Increase follower credits for a bot after confirmed settlement
+    pub async fn award_credits(
+        &self,
+        bot_pubkey: &str,
+        follower_pubkey: &str,
+        delta: f64,
+    ) -> Result<()> {
+        let client = self.pool.get().await.context("Failed to get PG client")?;
+        client
+            .execute(
+                "INSERT INTO credits (bot_pubkey, follower_pubkey, credits)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (bot_pubkey, follower_pubkey)
+                 DO UPDATE SET credits = credits + EXCLUDED.credits, updated_at = now()",
+                &[&bot_pubkey, &follower_pubkey, &delta],
+            )
+            .await
+            .context("Failed to award credits")?;
         Ok(())
     }
 }

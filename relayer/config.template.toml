@@ -41,6 +41,29 @@ max_connections = 5
 # nsec... or hex sk
 secret_key = "nsec1..."
 
+# Settlement worker (Hyperliquid tx hash polling)
+[settlement]
+# Base URL for tx lookup (defaults to Hyperliquid explorer tx endpoint)
+explorer_base = "https://app.hyperliquid.xyz/explorer/transaction"
+# Polling interval seconds
+poll_secs = 30
+# Max pending trades to check per tick
+batch_limit = 50
+# Optional shared token for settlement/reporting endpoints
+token = ""
+
+# Credit issuance config
+[settlement.credit]
+# Applied to leader trades (uses notional size * price * rate)
+leader_rate = 0.002
+# Applied to follower trades
+follower_rate = 0.001
+# Floor credit per confirmed trade
+min_credit = 0.5
+# Multiplier when pnl_usd > 0 (profit-making trades)
+profit_multiplier = 1.2
+enable = true
+
 # Monitoring configuration
 [monitoring]
 prometheus_port = 9090

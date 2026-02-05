@@ -13,7 +13,7 @@ use crate::core::subscription::{FanoutMessage, SubscriptionService};
 use nostr_sdk::Kind;
 use nostr_sdk::nips::nip04;
 use nostr_sdk::prelude::{Client, EventBuilder, Keys, PublicKey, Tag};
-use serde_json;
+use serde_json::Value;
 use std::str::FromStr;
 
 /// Wrapper for Event to enable sorting by timestamp
@@ -271,6 +271,10 @@ impl EventRouter {
         };
 
         // Followers for this bot
+
+        // Persist trade tx info if present in payload
+        self.maybe_record_trade(subs, &bot.bot_pubkey, &plaintext)
+            .await;
         let followers = subs.list_subscriptions(&bot.bot_pubkey).await?;
         if followers.is_empty() {
             return Ok(());
@@ -383,4 +387,101 @@ fn extract_agent_eth(plaintext: &str) -> Option<String> {
         .or_else(|| parsed.get("eth_address"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+#[derive(Debug)]
+struct TradeMeta {
+    tx_hash: String,
+    symbol: String,
+    side: String,
+    size: f64,
+    price: f64,
+    status: Option<String>,
+    pnl: Option<f64>,
+    pnl_usd: Option<f64>,
+    follower_pubkey: Option<String>,
+    role: String,
+}
+
+impl EventRouter {
+    async fn maybe_record_trade(
+        &self,
+        subs: &SubscriptionService,
+        bot_pubkey: &str,
+        plaintext: &str,
+    ) {
+        let meta = match extract_trade_meta(plaintext) {
+            Some(m) => m,
+            None => return,
+        };
+
+        if let Err(e) = subs
+            .record_trade_tx(
+                bot_pubkey,
+                meta.follower_pubkey.as_deref(),
+                &meta.role,
+                &meta.symbol,
+                &meta.side,
+                meta.size,
+                meta.price,
+                &meta.tx_hash,
+            )
+            .await
+        {
+            error!("Failed to record trade tx {}: {}", meta.tx_hash, e);
+        }
+
+        if meta.status.is_some() || meta.pnl.is_some() || meta.pnl_usd.is_some() {
+            if let Err(e) = subs
+                .update_trade_settlement(
+                    &meta.tx_hash,
+                    meta.status.as_deref().unwrap_or("pending"),
+                    meta.pnl,
+                    meta.pnl_usd,
+                )
+                .await
+            {
+                error!("Failed to update settlement for {}: {}", meta.tx_hash, e);
+            }
+        }
+    }
+}
+
+fn extract_trade_meta(plaintext: &str) -> Option<TradeMeta> {
+    let parsed: Value = serde_json::from_str(plaintext).ok()?;
+    let tx_hash = parsed.get("tx_hash")?.as_str()?.to_string();
+    let symbol = parsed.get("symbol")?.as_str()?.to_string();
+    let side = parsed.get("side")?.as_str()?.to_string();
+    let size = parsed.get("size")?.as_f64()?;
+    let price = parsed.get("price")?.as_f64()?;
+
+    let status = parsed
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let pnl = parsed.get("pnl").and_then(|v| v.as_f64());
+    let pnl_usd = parsed.get("pnl_usd").and_then(|v| v.as_f64());
+    let follower_pubkey = parsed
+        .get("follower_pubkey")
+        .or_else(|| parsed.get("follower"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let role = parsed
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("leader")
+        .to_string();
+
+    Some(TradeMeta {
+        tx_hash,
+        symbol,
+        side,
+        size,
+        price,
+        status,
+        pnl,
+        pnl_usd,
+        follower_pubkey,
+        role,
+    })
 }

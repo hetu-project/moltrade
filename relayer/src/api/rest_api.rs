@@ -1,7 +1,7 @@
 use axum::{
     Router,
-    extract::State,
-    http::StatusCode,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{delete, get, post},
 };
@@ -22,6 +22,7 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub subscriptions: Option<Arc<SubscriptionService>>,
     pub platform_pubkey: Option<String>,
+    pub settlement_token: Option<String>,
 }
 
 /// Create the REST API router
@@ -31,6 +32,7 @@ pub fn create_router(
     metrics: Arc<Metrics>,
     subscriptions: Option<Arc<SubscriptionService>>,
     platform_pubkey: Option<String>,
+    settlement_token: Option<String>,
 ) -> Router {
     let state = AppState {
         pool,
@@ -38,6 +40,7 @@ pub fn create_router(
         metrics,
         subscriptions,
         platform_pubkey,
+        settlement_token,
     };
     Router::new()
         .route("/health", get(health))
@@ -51,6 +54,9 @@ pub fn create_router(
         .route("/api/bots/register", post(register_bot))
         .route("/api/subscriptions", post(add_subscription))
         .route("/api/subscriptions/:bot_pubkey", get(list_subscriptions))
+        .route("/api/trades/record", post(record_trade))
+        .route("/api/trades/settlement", post(update_trade_settlement))
+        .route("/api/credits", get(list_credits))
         .with_state(state)
 }
 
@@ -186,6 +192,44 @@ struct RegisterBotResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct RecordTradeRequest {
+    bot_pubkey: String,
+    follower_pubkey: Option<String>,
+    role: String,
+    symbol: String,
+    side: String,
+    size: f64,
+    price: f64,
+    tx_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSettlementRequest {
+    tx_hash: String,
+    status: String,
+    pnl: Option<f64>,
+    pnl_usd: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreditsQuery {
+    bot_pubkey: Option<String>,
+    follower_pubkey: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreditItem {
+    bot_pubkey: String,
+    follower_pubkey: String,
+    credits: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct CreditsResponse {
+    credits: Vec<CreditItem>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AddSubscriptionRequest {
     bot_pubkey: String,
     follower_pubkey: String,
@@ -218,11 +262,11 @@ async fn register_bot(
         &payload.eth_address,
         &payload.name,
     )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to register bot: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to register bot: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(RegisterBotResponse {
         success: true,
@@ -256,6 +300,112 @@ async fn add_subscription(
         success: true,
         message: "subscription saved".to_string(),
     }))
+}
+
+/// Record a trade tx hash for later settlement/PnL tracking
+async fn record_trade(
+    State(state): State<AppState>,
+    Json(payload): Json<RecordTradeRequest>,
+) -> Result<Json<RelayResponse>, StatusCode> {
+    let svc = match &state.subscriptions {
+        Some(s) => s,
+        None => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+
+    svc.record_trade_tx(
+        &payload.bot_pubkey,
+        payload.follower_pubkey.as_deref(),
+        &payload.role,
+        &payload.symbol,
+        &payload.side,
+        payload.size,
+        payload.price,
+        &payload.tx_hash,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to record trade tx: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(RelayResponse {
+        success: true,
+        message: "trade recorded".to_string(),
+    }))
+}
+
+/// Update trade settlement/PnL after chain confirmation
+async fn update_trade_settlement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateSettlementRequest>,
+) -> Result<Json<RelayResponse>, StatusCode> {
+    let svc = match &state.subscriptions {
+        Some(s) => s,
+        None => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+
+    if !is_token_valid(&headers, state.settlement_token.as_deref()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    svc.update_trade_settlement(
+        &payload.tx_hash,
+        &payload.status,
+        payload.pnl,
+        payload.pnl_usd,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to update trade settlement: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(RelayResponse {
+        success: true,
+        message: "trade settlement updated".to_string(),
+    }))
+}
+
+/// List credits (optionally filter by bot or follower)
+async fn list_credits(
+    State(state): State<AppState>,
+    Query(q): Query<CreditsQuery>,
+) -> Result<Json<CreditsResponse>, StatusCode> {
+    let svc = match &state.subscriptions {
+        Some(s) => s,
+        None => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+
+    let rows = svc
+        .list_credits(q.bot_pubkey.as_deref(), q.follower_pubkey.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list credits: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(CreditsResponse {
+        credits: rows
+            .into_iter()
+            .map(|r| CreditItem {
+                bot_pubkey: r.bot_pubkey,
+                follower_pubkey: r.follower_pubkey,
+                credits: r.credits,
+            })
+            .collect(),
+    }))
+}
+
+fn is_token_valid(headers: &HeaderMap, expected: Option<&str>) -> bool {
+    match expected {
+        None => true, // no token configured -> allow
+        Some(token) => headers
+            .get("X-Settlement-Token")
+            .and_then(|h| h.to_str().ok())
+            .map(|v| v == token)
+            .unwrap_or(false),
+    }
 }
 
 /// List subscriptions for a bot
