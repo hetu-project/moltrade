@@ -17,6 +17,7 @@
     "exchange": "hyperliquid",
     "default_symbol": "HYPE",
     "default_strategy": "test",
+    "refresh_interval_seconds": 60,
     "position_size": 0.08,
     "max_position_size": 0.2,
     "stop_loss_percent": 0.03,
@@ -46,16 +47,23 @@
     "trend_following": {
       "min_trade_interval": 14400,
       "min_adx": 30
+    },
+    "test": {
+      "rsi_oversold": 35,
+      "rsi_overbought": 65,
+      "adx_threshold": 20,
+      "signal_threshold": 0.3,
+      "required_conditions": 2
     }
   },
   "risk_management": {
-    "max_daily_loss": 0.05,
-    "max_trades_per_day": 8,
-    "cool_down_seconds": 300
+    "max_daily_loss": 0.5,
+    "max_trades_per_day": 500,
+    "cool_down_seconds": 60
   },
   "nostr": {
-    "nsec": "nsec1yourprivatekey",
-    "platform_shared_key": "64_hex_shared_key_from_platform",
+    "nsec": "nsec19rs65lkqpqqhmft5s97cw94u627mfrhunt02jsftn9fycxv3dhhs0p45dh",
+    "relayer_nostr_pubkey": "npub1relayerpublickeyplaceholderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "relays": [
       "wss://nostr.parallel.hetu.org:8443"
     ],
@@ -64,12 +72,11 @@
   },
   "copytrade": {
     "enabled": false,
+    "role": "leader",
     "follow_pubkeys": [
-      "npub_of_leader"
+      "0xleader_eth_address"
     ],
-    "symbols": [
-      "HYPE"
-    ],
+    "symbols": [],
     "size_pct": 0.05,
     "min_order_value": 10.0
   }

@@ -5,12 +5,7 @@ lru_size = 100000
 rocksdb_path = "./data/rocksdb"
 
 [filters]
-allowed_kinds = [
-    30931,
-    30932,
-    30933,
-    30934,
-]
+allowed_kinds = [30931, 30932, 30933, 30934, 30935]
 
 [monitoring]
 log_level = "debug"
@@ -31,7 +26,7 @@ dsn = "postgres://postgres:postgres@localhost:5432/moltrade"
 max_connections = 5
 
 [relay]
-bootstrap_relays = ["ws://62.72.41.239:8000"]
+bootstrap_relays = ["wss://nostr.parallel.hetu.org:8443"]
 health_check_interval = 30
 max_connections = 10000
 

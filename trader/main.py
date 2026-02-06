@@ -20,7 +20,7 @@ from strategies.strategies import get_strategy
 from telegram_notifier import get_notifier
 from nostr.signal_service import SignalBroadcaster
 from nostr.copytrade_listener import CopyTradeListener
-from pynostr.key import PrivateKey
+from pynostr.key import PrivateKey, PublicKey
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +33,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class ImprovedTradingBot:
+def _pubkey_to_hex(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    try:
+        if raw.startswith('nsec'):
+            priv = PrivateKey.from_nsec(raw)
+            return priv.public_key.hex()
+        if raw.startswith('npub'):
+            if hasattr(PublicKey, 'from_npub'):
+                return PublicKey.from_npub(raw).hex()  # type: ignore[attr-defined]
+            try:
+                from pynostr import nip19
+
+                hrp, data = nip19.decode(raw)
+                if hrp == 'npub' and isinstance(data, bytes):
+                    return data.hex()
+            except Exception:
+                pass
+        PublicKey.from_hex(raw)
+        return raw
+    except Exception:
+        logger.warning("Invalid relayer nostr pubkey; expected npub/nsec/hex", exc_info=False)
+        return None
+
+
+class TradingBot:
     """Improved Trading Bot - Focused on optimizing risk management"""
 
     def __init__(self, config_path: str = "config.json", test_mode: bool = False, strategy_name: Optional[str] = None):
@@ -63,10 +88,11 @@ class ImprovedTradingBot:
 
         # Copy-trade listener (optional)
         self.copytrade_cfg = self.config.get('copytrade', {})
+        self.copytrade_role = (self.copytrade_cfg.get('role') or 'leader').lower()
         self.copytrade_listener = None
-        if self.copytrade_cfg.get('enabled'):
+        if self.copytrade_cfg.get('enabled') and self.copytrade_role == 'follower':
             nostr_cfg = self.config.get('nostr', {})
-            shared_key = nostr_cfg.get('platform_shared_key')
+            shared_key = _pubkey_to_hex(nostr_cfg.get('relayer_nostr_pubkey'))
             nsec = nostr_cfg.get('nsec')
             relays = nostr_cfg.get('relays', [])
             follow_pubkeys = self.copytrade_cfg.get('follow_pubkeys', [])
@@ -80,7 +106,7 @@ class ImprovedTradingBot:
                 )
                 self.copytrade_listener.start()
             else:
-                logger.warning("Copy-trade enabled but nostr shared key/nsec/relays missing; listener not started")
+                logger.warning("Copy-trade enabled for follower mode but relayer_nostr_pubkey/nsec/relays missing or invalid; listener not started")
 
         logger.info(f"🤖 Trading bot initialized | Strategy: {strategy_name} | Test mode: {test_mode}")
 
@@ -107,6 +133,11 @@ class ImprovedTradingBot:
         # Auto-provision nostr keys and relays if missing to improve UX
         nostr_cfg = config.setdefault('nostr', {})
         updated = False
+
+        legacy_shared = nostr_cfg.pop('platform_shared_key', None)
+        if legacy_shared and not nostr_cfg.get('relayer_nostr_pubkey'):
+            nostr_cfg['relayer_nostr_pubkey'] = legacy_shared
+            logger.info("Migrated nostr.platform_shared_key to nostr.relayer_nostr_pubkey")
 
         nsec = nostr_cfg.get('nsec')
         relays = nostr_cfg.get('relays', [])
@@ -418,6 +449,7 @@ class ImprovedTradingBot:
                         pnl=None,
                         pnl_percent=None,
                         test_mode=True,
+                        account=self.config.get('wallet_address'),
                     )
 
                 return True
@@ -459,6 +491,7 @@ class ImprovedTradingBot:
                     pnl=None,
                     pnl_percent=None,
                     test_mode=False,
+                    account=self.config.get('wallet_address'),
                 )
 
             # Record trade
@@ -495,6 +528,12 @@ class ImprovedTradingBot:
             symbol = payload.get('symbol')
             signal_type = payload.get('signal')
             price = float(payload.get('price', 0) or 0)
+
+            leader_eth = payload.get('account') or payload.get('agent_eth_address') or payload.get('eth_address')
+            allowed_eth = self.copytrade_cfg.get('follow_pubkeys', [])
+            if allowed_eth and leader_eth not in allowed_eth:
+                logger.debug("Copy-trade: leader %s not in allowlist", leader_eth)
+                return
 
             if not symbol or signal_type not in ('buy', 'sell') or price <= 0:
                 logger.debug("Copy-trade: invalid payload %s", payload)
@@ -547,11 +586,29 @@ class ImprovedTradingBot:
         except Exception as exc:
             logger.warning("Copy-trade handling failed: %s", exc)
 
-    def run(self, symbol: Optional[str] = None, interval: int = 300):
-        """Run the trading bot (refresh interval: 5 minutes)"""
-        symbol = symbol or self.config['trading']['default_symbol']
+    def run(self, symbol: Optional[str] = None, interval: Optional[int] = None):
+        """Run the trading bot (refresh interval from config unless overridden)"""
+        trading_cfg = self.config.get('trading', {})
+        resolved_interval = interval or int(trading_cfg.get('refresh_interval_seconds', 300))
+        symbol = symbol or trading_cfg.get('default_symbol')
 
-        logger.info(f"🚀 Starting trading bot | Symbol: {symbol} | Refresh interval: {interval} seconds")
+        logger.info(f"🚀 Starting trading bot | Symbol: {symbol} | Refresh interval: {resolved_interval} seconds")
+
+        # In follower mode we only listen to copy-trade signals and skip strategy trading.
+        if self.copytrade_cfg.get('enabled') and self.copytrade_role == 'follower':
+            logger.info("Copy-trade follower mode active: strategy loop disabled; awaiting Nostr signals (kind 30931)")
+            try:
+                while True:
+                    time.sleep(resolved_interval)
+            except KeyboardInterrupt:
+                logger.info("Received stop signal, shutting down...")
+                self.shutdown()
+            except Exception as e:
+                logger.error(f"Runtime error (follower idle loop): {e}")
+                if self.notifier:
+                    self.notifier.notify_error(f"Bot runtime exception: {str(e)}")
+                self.shutdown()
+            return
 
         # Send startup notification
         if self.notifier and self.config.get('telegram', {}).get('notify_startup', True):
@@ -605,7 +662,7 @@ class ImprovedTradingBot:
                     self.execute_trade(symbol, signal)
 
                 # Wait for next loop
-                time.sleep(interval)
+                time.sleep(resolved_interval)
 
         except KeyboardInterrupt:
             logger.info("Received stop signal, shutting down...")
@@ -651,9 +708,13 @@ class ImprovedTradingBot:
 
 
 def run_init(config_path: Path) -> None:
-    print("===============================================")
-    print(" 🦉 Moltrade Trader Init (no trading will run)")
-    print("===============================================")
+    print("\033[1;36m" + "="*60 + "\033[0m")
+    print("\033[1;35m🦉 MOLTRADE TRADER INIT\033[0m")
+    print("\033[1;33m⚡ Autonomous AI Trading Engine\033[0m")
+    print("\033[1;36m" + "="*60 + "\033[0m")
+    print("\033[1;32m💎 YOUR 24/7 AI TRADER — EARNING WHILE YOU SLEEP\033[0m")
+    print("\033[1;31m🔥 POWERED BY ADVANCED STRATEGIES & Privacy NOSTR\033[0m")
+    print("\033[1;36m" + "="*60 + "\033[0m")
 
     example = config_path.parent / "config.example.json"
     if not config_path.exists():
@@ -678,13 +739,85 @@ def run_init(config_path: Path) -> None:
             if val:
                 return val
 
+    total_steps = 6
+
+    def print_step(i: int, title: str) -> None:
+        step_color = "\033[1;36m"
+        title_color = "\033[1;37m"
+        reset = "\033[0m"
+        print(f"\n{step_color}[{i}/{total_steps}]{reset} {title_color}{title}{reset}")
+
+    # [5/6] Nostr keys is intentionally silent (auto-provision only)
+    def ensure_nostr_keys_silent() -> None:
+        nostr_cfg = config.setdefault('nostr', {})
+        nsec = nostr_cfg.get('nsec')
+
+        if not nsec or nsec == "nsec1yourprivatekey":
+            priv = PrivateKey()
+            nostr_cfg['nsec'] = priv.bech32()
+            nostr_cfg['npub'] = priv.public_key.bech32()
+        else:
+            try:
+                priv = PrivateKey.from_nsec(nsec)
+                if not nostr_cfg.get('npub'):
+                    nostr_cfg['npub'] = priv.public_key.bech32()
+            except Exception:
+                priv = PrivateKey()
+                nostr_cfg['nsec'] = priv.bech32()
+                nostr_cfg['npub'] = priv.public_key.bech32()
+
+        if not nostr_cfg.get('relays'):
+            nostr_cfg['relays'] = ["wss://nostr.parallel.hetu.org:8443"]
+
+        return
+
+    # [4/6] Trading basics may be skipped for copy-trade followers
+    def ensure_trading_defaults_silent() -> None:
+        trading = config.setdefault('trading', {})
+        trading.setdefault('exchange', 'hyperliquid')
+        trading.setdefault('default_symbol', 'HYPE')
+        trading.setdefault('default_strategy', 'test')
+        return
+
+    # Copy-trade first (beginner default)
+    print_step(1, "Copy-trade setup")
+    copy_cfg = config.setdefault('copytrade', {})
+    use_copytrade = prompt("Enable copy-trade follower mode? (Y/n)", "y").strip().lower()
+    is_copytrade_follower = (use_copytrade == '') or use_copytrade.startswith('y')
+
+    if is_copytrade_follower:
+        copy_cfg['enabled'] = True
+        copy_cfg['role'] = 'follower'
+        leader_eth = prompt(
+            "Leader ETH address to follow",
+            (copy_cfg.get('follow_pubkeys') or [None])[0] or "0x...",
+            allow_empty=True,
+        ).strip()
+        if leader_eth:
+            copy_cfg['follow_pubkeys'] = [leader_eth]
+        else:
+            copy_cfg['enabled'] = False
+            copy_cfg['follow_pubkeys'] = []
+            print("Copy-trade disabled: missing leader ETH address")
+
+        copy_cfg['symbols'] = []
+        copy_cfg['size_pct'] = float(copy_cfg.get('size_pct', 0.05))
+        copy_cfg['min_order_value'] = float(copy_cfg.get('min_order_value', 10.0))
+    else:
+        copy_cfg['enabled'] = False
+        copy_cfg['role'] = (copy_cfg.get('role') or 'leader').lower()
+
     # Base URL for relayer API
-    print("\n[1/5] Relayer setup")
-    base_url = prompt("Relayer base URL (for bot registration)", config.get('relayer_api', 'http://localhost:8080'))
+    print_step(2, "Relayer setup")
+    base_url = prompt(
+        "Relayer base URL (for bot registration)",
+        config.get('relayer_api', 'http://localhost:8080'),
+    )
     config['relayer_api'] = base_url.rstrip('/')
 
     # Wallet setup
-    print("\n[2/5] Wallet setup: choose to generate a new private key or use your own wallet.")
+    print_step(3, "Wallet setup")
+    print("Choose to generate a new private key or use your own wallet.")
     print("1) Generate new private key (recommended for testing)\n2) Use existing wallet")
     choice = prompt("Select option", "2")
 
@@ -694,12 +827,31 @@ def run_init(config_path: Path) -> None:
     if choice == '1':
         generated_pk = secrets.token_hex(32)
         print("Generated 32-byte hex private key for you.")
-        wallet_address = prompt("Enter wallet_address (must correspond to the private key)", wallet_address or "0x...")
+
+        # Derive an EVM address from the generated private key to avoid asking users
+        # to manually enter an address that must match the key.
+        derived_address: Optional[str] = None
+        try:
+            from eth_account import Account  # type: ignore
+
+            derived_address = Account.from_key(bytes.fromhex(generated_pk)).address
+        except Exception:
+            derived_address = None
+
+        if derived_address:
+            wallet_address = derived_address
+            print(f"Derived wallet_address from generated private key: {wallet_address}")
+        else:
+            wallet_address = prompt(
+                "Enter wallet_address (must correspond to the private key)",
+                wallet_address or "0x...",
+            )
+
         store_env = prompt("Store private key as env reference? (y/N)", "y")
         if store_env.lower().startswith('y'):
             env_name = prompt("Env var name for private key", "PRIVATE_KEY")
             private_key = f"${env_name}"
-            print(f"Remember to export {env_name}={generated_pk}")
+            print(f"\033[91mRemember to export {env_name}={generated_pk}\033[0m")
         else:
             private_key = generated_pk
     else:
@@ -716,33 +868,21 @@ def run_init(config_path: Path) -> None:
     config['wallet_address'] = wallet_address
     config['private_key'] = private_key
 
-    # Trading essentials
-    print("\n[3/5] Trading basics")
-    trading = config.setdefault('trading', {})
-    trading['exchange'] = prompt("Trading.exchange", trading.get('exchange', 'hyperliquid'))
-    trading['default_symbol'] = prompt("Trading.default_symbol", trading.get('default_symbol', 'HYPE'))
-    trading['default_strategy'] = prompt("Trading.default_strategy", trading.get('default_strategy', 'test'))
-    print("Other trading/risk fields can be adjusted later in config.json.")
-
-    # Nostr keys: generate if missing/placeholder
-    print("\n[4/5] Nostr keys")
-    nostr_cfg = config.setdefault('nostr', {})
-    nsec = nostr_cfg.get('nsec')
-    if not nsec or nsec == "nsec1yourprivatekey":
-        priv = PrivateKey()
-        nostr_cfg['nsec'] = priv.bech32()
-        nostr_cfg['npub'] = priv.public_key.bech32()
-        print("Generated Nostr nsec/npub and wrote to config.")
+    # Trading essentials (skipped for copy-trade followers)
+    if not is_copytrade_follower:
+        print_step(4, "Trading basics")
+        trading = config.setdefault('trading', {})
+        trading['exchange'] = prompt("Trading.exchange", trading.get('exchange', 'hyperliquid'))
+        trading['default_symbol'] = prompt("Trading.default_symbol", trading.get('default_symbol', 'HYPE'))
+        trading['default_strategy'] = prompt("Trading.default_strategy", trading.get('default_strategy', 'test'))
+        print("Other trading/risk fields can be adjusted later in config.json.")
     else:
-        try:
-            priv = PrivateKey.from_nsec(nsec)
-            if not nostr_cfg.get('npub'):
-                nostr_cfg['npub'] = priv.public_key.bech32()
-        except Exception:
-            priv = PrivateKey()
-            nostr_cfg['nsec'] = priv.bech32()
-            nostr_cfg['npub'] = priv.public_key.bech32()
-            print("Invalid nsec; generated a new Nostr keypair.")
+        ensure_trading_defaults_silent()
+
+    # Nostr keys (silent)
+    ensure_nostr_keys_silent()
+
+    nostr_cfg = config.setdefault('nostr', {})
 
     # Save config after prompts
     with config_path.open('w') as f:
@@ -751,7 +891,7 @@ def run_init(config_path: Path) -> None:
     print(f"Config saved to {config_path}.")
 
     # Bot registration
-    print("\n[5/5] Bot registration")
+    print_step(6, "Bot registration")
     try_register = prompt("Register bot with relayer now? (y/N)", "y")
     if try_register.lower().startswith('y'):
         bot_name = prompt("Bot name", "my-bot-1")
@@ -769,11 +909,46 @@ def run_init(config_path: Path) -> None:
             print(f"Bot registration response: {data}")
             platform_pubkey = data.get('platform_pubkey')
             if platform_pubkey:
-                nostr_cfg['platform_shared_key'] = platform_pubkey
+                nostr_cfg['relayer_nostr_pubkey'] = platform_pubkey
                 with config_path.open('w') as f:
                     json.dump(config, f, indent=2, ensure_ascii=False)
                     f.write('\n')
-                print("Saved platform_pubkey into nostr.platform_shared_key")
+                print("Saved platform_pubkey into nostr.relayer_nostr_pubkey")
+
+                # Emit plaintext agent register event over nostr
+                try:
+                    from nostr.signal_service import SignalBroadcaster
+
+                    sb = SignalBroadcaster(config)
+                    if sb.enabled and sb.publisher is not None:
+                        sb.send_agent_register(
+                            bot_pubkey=wallet_address,
+                            nostr_pubkey=nostr_cfg.get('npub', ''),
+                            eth_address=wallet_address,
+                            name=bot_name,
+                        )
+                        print("Published agent_register nostr event")
+                except Exception as exc:
+                    print(f"Failed to publish agent_register nostr event: {exc}")
+
+            # Auto-subscribe follower to leader if copy-trade follower was configured
+            if is_copytrade_follower and copy_cfg.get('follow_pubkeys'):
+                leader_eth = (copy_cfg.get('follow_pubkeys') or [None])[0]
+                follower_eth = wallet_address
+                shared_secret = nostr_cfg.get('npub', '')
+                if leader_eth and follower_eth and shared_secret:
+                    sub_payload = {
+                        "bot_pubkey": leader_eth,
+                        "follower_pubkey": follower_eth,
+                        "shared_secret": shared_secret,
+                    }
+                    sub_url = f"{config['relayer_api']}/api/subscriptions"
+                    try:
+                        sub_resp = requests.post(sub_url, json=sub_payload, timeout=10)
+                        sub_resp.raise_for_status()
+                        print("Follower subscription created for copy-trade.")
+                    except Exception as exc:
+                        print(f"Failed to create follower subscription: {exc}")
         except Exception as exc:
             print(f"Bot registration failed: {exc}")
     else:
@@ -788,12 +963,12 @@ def run_init(config_path: Path) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Improved Hyperliquid Trading Bot')
+    parser = argparse.ArgumentParser(description='Moltrade Trading Bot(Hyperliquid, Polymarket, etc.)')
     parser.add_argument('--config', type=str, default='config.json', help='Config file path')
     parser.add_argument('--test', action='store_true', help='Test mode')
     parser.add_argument('--strategy', type=str, help='Strategy name')
     parser.add_argument('--symbol', type=str, help='Trading pair')
-    parser.add_argument('--interval', type=int, default=300, help='Refresh interval (seconds)')
+    parser.add_argument('--interval', type=int, default=None, help='Refresh interval override in seconds (otherwise from config)')
     parser.add_argument('--init', action='store_true', help='Initialize config interactively (no trading)')
 
     args = parser.parse_args()
@@ -808,7 +983,7 @@ def main():
             config = json.load(f)
             strategy_name = config['trading'].get('default_strategy', 'test')
 
-    bot = ImprovedTradingBot(config_path=args.config, test_mode=args.test, strategy_name=strategy_name)
+    bot = TradingBot(config_path=args.config, test_mode=args.test, strategy_name=strategy_name)
     bot.run(symbol=args.symbol, interval=args.interval)
 
 

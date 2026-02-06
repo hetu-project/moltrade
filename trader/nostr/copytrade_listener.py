@@ -3,13 +3,15 @@ Copy-trade listener that subscribes to Nostr trade signals and forwards
 accepted signals to a callback after decrypting.
 """
 
+import json
 import threading
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from nostr import init_global_publisher, get_publisher
 from nostr.events import TRADE_SIGNAL_KIND
-from nostr.crypto import GroupV1Crypto
+from pynostr.encrypted_dm import EncryptedDirectMessage
+from pynostr.key import PrivateKey, PublicKey
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +68,19 @@ class CopyTradeListener:
                 continue
 
             sender = getattr(ev, "pubkey", "")
-            if self._allowed_pubkeys and sender not in self._allowed_pubkeys:
-                logger.debug("Skip signal from %s (not allowed)", sender)
-                continue
 
             try:
-                payload = GroupV1Crypto.decrypt(ev.content, self._shared_key_hex)
+                receiver = PrivateKey.from_nsec(self._nsec)
+                sender_pk = PublicKey.from_hex(self._shared_key_hex)
+                dm = EncryptedDirectMessage(
+                    receiver.public_key.hex(),
+                    sender_pk.hex(),
+                    encrypted_message=ev.content,
+                )
+                dm.decrypt(receiver.hex())
+                payload = json.loads(dm.cleartext_content)
             except Exception as exc:
-                logger.debug("Failed to decrypt signal: %s", exc)
+                logger.debug("Failed to decrypt signal via NIP-04 DM: %s", exc)
                 continue
 
             if not isinstance(payload, dict):

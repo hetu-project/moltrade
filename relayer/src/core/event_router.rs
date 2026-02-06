@@ -12,9 +12,16 @@ use crate::core::dedupe_engine::DeduplicationEngine;
 use crate::core::subscription::{FanoutMessage, SubscriptionService};
 use nostr_sdk::Kind;
 use nostr_sdk::nips::nip04;
-use nostr_sdk::prelude::{Client, EventBuilder, Keys, PublicKey, Tag};
+use nostr_sdk::prelude::{Client, EventBuilder, Keys, PublicKey, Tag, Timestamp};
 use serde_json::Value;
 use std::str::FromStr;
+
+const KIND_TRADE_SIGNAL: u16 = 30931;
+const KIND_COPYTRADE_INTENT: u16 = 30932;
+const KIND_HEARTBEAT: u16 = 30933;
+const KIND_EXECUTION_REPORT: u16 = 30934;
+const KIND_AGENT_REGISTER: u16 = 30935;
+const STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Wrapper for Event to enable sorting by timestamp
 #[derive(Clone)]
@@ -190,6 +197,17 @@ impl EventRouter {
 
         // Send events to downstream in timestamp order
         for event in batch {
+            if self.is_stale(&event) {
+                debug!(
+                    "Skip stale event id={} kind={} age_secs={}",
+                    event.id.to_hex(),
+                    event.kind.as_u16(),
+                    Timestamp::now()
+                        .as_secs()
+                        .saturating_sub(event.created_at.as_secs())
+                );
+                continue;
+            }
             self.maybe_update_last_seen(&event).await;
             if let Err(e) = self.handle_copytrade_fanout(&event).await {
                 error!("Fanout processing failed: {}", e);
@@ -237,6 +255,72 @@ impl EventRouter {
     }
 
     async fn handle_copytrade_fanout(&self, event: &Event) -> Result<()> {
+        // Short-circuit heartbeat-like events: no decrypt/fanout required
+        if matches!(event.kind.as_u16(), KIND_HEARTBEAT | KIND_EXECUTION_REPORT) {
+            return Ok(());
+        }
+
+        // Agent registration is plaintext and upserts the bot record
+        if event.kind.as_u16() == KIND_AGENT_REGISTER {
+            let subs = match &self.subscription_service {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+
+            let parsed: Value = match serde_json::from_str(&event.content) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "Agent register decode failed for {}: {}",
+                        event.id.to_hex(),
+                        e
+                    );
+                    return Ok(());
+                }
+            };
+
+            let nostr_pubkey = parsed
+                .get("nostr_pubkey")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| event.pubkey.to_hex());
+            let bot_pubkey = parsed
+                .get("bot_pubkey")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| event.pubkey.to_hex());
+            let eth_address = parsed
+                .get("eth_address")
+                .or_else(|| parsed.get("account"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = parsed
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("agent")
+                .to_string();
+
+            if eth_address.is_empty() {
+                error!("Agent register missing eth_address for {}", bot_pubkey);
+                return Ok(());
+            }
+
+            if let Err(e) = subs
+                .register_bot(&bot_pubkey, &nostr_pubkey, &eth_address, &name)
+                .await
+            {
+                error!("Agent register upsert failed for {}: {}", bot_pubkey, e);
+            } else {
+                info!(
+                    "Registered bot via nostr: bot_pubkey={} eth={}",
+                    bot_pubkey, eth_address
+                );
+            }
+
+            return Ok(());
+        }
+
         // Preconditions: need subscription service and platform nostr keys
         let subs = match &self.subscription_service {
             Some(s) => s,
@@ -247,6 +331,12 @@ impl EventRouter {
             None => return Ok(()),
         };
 
+        // Skip decrypting events we just published (self-sent fanout echoes)
+        if event.pubkey == nostr_keys.public_key() {
+            debug!("Skip self-published fanout event {}", event.id.to_hex());
+            return Ok(());
+        }
+
         // Decrypt content using platform key and sender pubkey
         let plaintext = match nip04::decrypt(nostr_keys.secret_key(), &event.pubkey, &event.content)
         {
@@ -256,6 +346,19 @@ impl EventRouter {
                 return Ok(());
             }
         };
+
+        let preview = if plaintext.len() > 256 {
+            format!("{}...", &plaintext[..256])
+        } else {
+            plaintext.clone()
+        };
+        debug!(
+            "Decrypted nostr event id={} kind={} from={} preview={}",
+            event.id.to_hex(),
+            event.kind.as_u16(),
+            event.pubkey.to_hex(),
+            preview,
+        );
 
         // Extract agent eth address from JSON payload
         let agent_eth = extract_agent_eth(&plaintext)
@@ -299,12 +402,13 @@ impl EventRouter {
         // Publish encrypted nostr events to followers if client exists
         if let Some(client) = &self.nostr_client {
             for follower in followers {
-                let follower_pk = match PublicKey::from_str(&follower.follower_pubkey) {
+                let follower_pk_str = follower.shared_secret.as_str();
+                let follower_pk = match PublicKey::from_str(follower_pk_str) {
                     Ok(pk) => pk,
                     Err(e) => {
                         error!(
-                            "Invalid follower pubkey {}: {}",
-                            follower.follower_pubkey, e
+                            "Invalid follower shared_secret pubkey {}: {}",
+                            follower_pk_str, e
                         );
                         continue;
                     }
@@ -314,10 +418,7 @@ impl EventRouter {
                     match nip04::encrypt(nostr_keys.secret_key(), &follower_pk, &plaintext) {
                         Ok(ct) => ct,
                         Err(e) => {
-                            error!(
-                                "Encrypt for follower {} failed: {}",
-                                follower.follower_pubkey, e
-                            );
+                            error!("Encrypt for follower {} failed: {}", follower_pk_str, e);
                             continue;
                         }
                     };
@@ -326,10 +427,7 @@ impl EventRouter {
                 builder = builder.tag(Tag::public_key(follower_pk));
 
                 if let Err(e) = client.send_event_builder(builder).await {
-                    error!(
-                        "Publish to follower {} failed: {}",
-                        follower.follower_pubkey, e
-                    );
+                    error!("Publish to follower {} failed: {}", follower_pk_str, e);
                 }
             }
         }
@@ -339,8 +437,14 @@ impl EventRouter {
 }
 
 impl EventRouter {
+    fn is_stale(&self, event: &Event) -> bool {
+        let now = Timestamp::now().as_secs();
+        let created = event.created_at.as_secs();
+        now.saturating_sub(created) > STALE_AFTER.as_secs()
+    }
+
     async fn maybe_update_last_seen(&self, event: &Event) {
-        const HEARTBEAT_KIND: u16 = 30934;
+        const HEARTBEAT_KIND: u16 = KIND_HEARTBEAT;
         const MIN_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
         if event.kind.as_u16() != HEARTBEAT_KIND {
@@ -384,6 +488,7 @@ fn extract_agent_eth(plaintext: &str) -> Option<String> {
     parsed
         .get("agent_eth_address")
         .or_else(|| parsed.get("agent"))
+        .or_else(|| parsed.get("account"))
         .or_else(|| parsed.get("eth_address"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())

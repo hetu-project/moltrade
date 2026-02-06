@@ -54,7 +54,7 @@
     },
     "nostr": {
         "nsec": "nsec1yourprivatekey",
-        "platform_shared_key": "64_hex_shared_key_from_platform",
+        "relayer_nostr_pubkey": "npub1relayerpublickeyplaceholderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "relays": [
             "wss://nostr.parallel.hetu.org:8443"
         ],
@@ -63,12 +63,11 @@
     },
     "copytrade": {
         "enabled": false,
+        "role": "leader",
         "follow_pubkeys": [
-            "npub_of_leader"
+            "0xleader_eth_address"
         ],
-        "symbols": [
-            "HYPE"
-        ],
+        "symbols": [],
         "size_pct": 0.05,
         "min_order_value": 10.0
     }

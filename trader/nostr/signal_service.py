@@ -3,24 +3,28 @@ Signal broadcasting helpers for the trading bot.
 
 Responsibilities:
 - Initialize the global Nostr publisher
-- Encrypt payloads with the shared platform key
+- Encrypt payloads using DM (pynostr EncryptedDirectMessage)
 - Publish trade signals, copy-trade intents, and execution reports
 """
 
+import json
 import logging
 from typing import Any, Dict, Optional
 
 from dataclasses import asdict
 import requests
+from pynostr.encrypted_dm import EncryptedDirectMessage
+from pynostr.key import PrivateKey, PublicKey
 
-from nostr.crypto import Nip04Crypto
 from nostr.events import (
     TradeSignalEvent,
     CopyTradeIntentEvent,
     ExecutionReportEvent,
+    AgentRegisterEvent,
     TradeSignalPayload,
     CopyTradeIntentPayload,
     ExecutionReportPayload,
+    AgentRegisterPayload,
 )
 from nostr.publisher import init_global_publisher, get_publisher
 
@@ -32,8 +36,9 @@ class SignalBroadcaster:
 
     def __init__(self, config: Dict[str, Any]):
         nostr_cfg = config.get("nostr", {})
-        self.enabled = bool(nostr_cfg.get("nsec"))
-        self.shared_key = nostr_cfg.get("platform_shared_key")
+        self.nsec = nostr_cfg.get("nsec")
+        self.enabled = bool(self.nsec)
+        self.platform_key_raw = nostr_cfg.get("relayer_nostr_pubkey")
         self.sid = nostr_cfg.get("sid", "bot-main")
         self.role = nostr_cfg.get("role", "bot")
         self.relays = nostr_cfg.get("relays", [])
@@ -45,8 +50,11 @@ class SignalBroadcaster:
             self.publisher = None
             return
 
-        if not self.shared_key:
-            logger.info("Nostr broadcasting disabled: missing platform_shared_key")
+        self.recipient_pubkey_hex = self._derive_recipient_pubkey(self.platform_key_raw)
+        if not self.recipient_pubkey_hex:
+            logger.warning(
+                "Nostr broadcasting disabled: relayer_nostr_pubkey must be npub/nsec/hex of relayer pubkey"
+            )
             self.publisher = None
             self.enabled = False
             return
@@ -84,10 +92,45 @@ class SignalBroadcaster:
             return False
 
     def _encrypt(self, payload: Dict[str, Any]) -> Optional[str]:
+        if not self.nsec or not self.recipient_pubkey_hex:
+            return None
         try:
-            return Nip04Crypto.encrypt(payload, self.shared_key)
+            dm = EncryptedDirectMessage()
+            dm.encrypt(
+                PrivateKey.from_nsec(self.nsec).hex(),
+                recipient_pubkey=self.recipient_pubkey_hex,
+                cleartext_content=json.dumps(payload),
+            )
+            dm_event = dm.to_event()
+            dm_event.sign(PrivateKey.from_nsec(self.nsec).hex())
+            return dm_event.content
         except Exception as exc:
-            logger.warning("Failed to encrypt payload: %s", exc)
+            logger.warning("Failed to encrypt payload via DM: %s", exc)
+            return None
+
+    @staticmethod
+    def _derive_recipient_pubkey(platform_key_raw: Optional[str]) -> Optional[str]:
+        if not platform_key_raw:
+            return None
+        try:
+            if platform_key_raw.startswith("nsec"):
+                priv = PrivateKey.from_nsec(platform_key_raw)
+                return priv.public_key.hex()
+            if platform_key_raw.startswith("npub"):
+                if hasattr(PublicKey, "from_npub"):
+                    return PublicKey.from_npub(platform_key_raw).hex()  # type: ignore[attr-defined]
+                try:
+                    from pynostr import nip19
+
+                    hrp, data = nip19.decode(platform_key_raw)
+                    if hrp == "npub" and isinstance(data, bytes):
+                        return data.hex()
+                except Exception:
+                    pass
+            # assume hex
+            PublicKey.from_hex(platform_key_raw)  # validate
+            return platform_key_raw
+        except Exception:
             return None
 
     # ------------------------------------------------------------------
@@ -174,6 +217,7 @@ class SignalBroadcaster:
         pnl: Optional[float],
         pnl_percent: Optional[float],
         test_mode: bool,
+        account: Optional[str] = None,
         note: Optional[str] = None,
     ) -> bool:
         if not self.enabled:
@@ -189,6 +233,7 @@ class SignalBroadcaster:
             pnl=pnl,
             pnl_percent=pnl_percent,
             test_mode=test_mode,
+            account=account,
             note=note,
         )
         encrypted = self._encrypt(asdict(payload))
@@ -216,6 +261,27 @@ class SignalBroadcaster:
             )
 
         return published
+
+    def send_agent_register(
+        self,
+        *,
+        bot_pubkey: str,
+        nostr_pubkey: str,
+        eth_address: str,
+        name: str,
+    ) -> bool:
+        if not self.enabled or self.publisher is None:
+            return False
+
+        payload = AgentRegisterPayload(
+            bot_pubkey=bot_pubkey,
+            nostr_pubkey=nostr_pubkey,
+            eth_address=eth_address,
+            name=name,
+        )
+
+        event = AgentRegisterEvent.build(sid=self.sid, content=payload)
+        return self._publish(event)
 
     def _report_trade_tx(
         self,

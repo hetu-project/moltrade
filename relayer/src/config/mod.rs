@@ -39,7 +39,7 @@ pub struct FilterConfig {
 }
 
 fn default_allowed_kinds() -> Vec<u16> {
-    vec![30931, 30932, 30933, 30934]
+    vec![30931, 30932, 30933, 30934, 30935]
 }
 
 #[derive(Debug, Clone, Deserialize)]

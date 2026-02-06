@@ -16,12 +16,14 @@ class TestStrategy:
         self.last_trade_time = 0
         self.trade_count = 0
 
-        # Test parameters - More relaxed conditions
-        self.rsi_oversold = 35      # Lowered to 35 for earlier bottom-fishing
-        self.rsi_overbought = 65    # Originally 60
-        self.adx_threshold = 20     # Increased to 20 to ensure a trend exists
-        self.signal_threshold = 0.5  # Originally 0.5
-        self.required_conditions = 2  # Lowered to 2/5 to allow trades!
+        # Test parameters - More relaxed conditions (override via config.strategies.test)
+        cfg = config.get('strategies', {}).get('test', {})
+        print(f"TestStrategy config: {cfg}")
+        self.rsi_oversold = cfg.get('rsi_oversold', 35)
+        self.rsi_overbought = cfg.get('rsi_overbought', 65)
+        self.adx_threshold = cfg.get('adx_threshold', 20)
+        self.signal_threshold = cfg.get('signal_threshold', 0.5)
+        self.required_conditions = cfg.get('required_conditions', 2)
 
     def should_trade(self) -> bool:
         """Check if trading is allowed (risk control)"""

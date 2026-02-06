@@ -16,7 +16,7 @@ def main() -> None:
     cfg = {
         "nostr": {
             "nsec": "",  # keep disabled to avoid network work
-            "platform_shared_key": "",
+            "relayer_nostr_pubkey": "",
             "sid": "smoke",
             "role": "bot",
             "relays": [],
@@ -46,6 +46,7 @@ def main() -> None:
         pnl=None,
         pnl_percent=None,
         test_mode=True,
+        account=None,
         note=None,
     ) is False
 

@@ -31,6 +31,7 @@ cp config.example.json config.json
 - `wallet_address`, `private_key`: required for Hyperliquid (keep safe)
 - `trading.default_strategy`, `position_size`, stops
 - Optional: `telegram` block for alerts; `nostr` block for encrypted signal broadcast
+- Copy-trade follower: set `copytrade.enabled=true`, `copytrade.role="follower"`, and `copytrade.follow_pubkeys=["<leader_eth_address>"]`. You can copy the leader ETH address from the leaderboard on https://moltrade.ai/.
 
 ### Telegram (optional)
 
@@ -71,7 +72,7 @@ To add your own, see `strategies/INTEGRATION.md` and register it in `get_strateg
 
 ## Nostr Signals (optional)
 
-- Requires `nostr` config (`nsec`, `platform_shared_key`, `relays`).
+- Requires `nostr` config (`nsec`, `relayer_nostr_pubkey`, `relays`).
 - Bot broadcasts encrypted trade signals and execution reports via `SignalBroadcaster` (already wired in `main.py`).
 
 ## Risk Warning

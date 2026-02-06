@@ -11,7 +11,7 @@ lru_size = 100_000
 rocksdb_path = "./data/rocksdb"
 
 [filters]
-allowed_kinds = [30931, 30932, 30933, 30934]
+allowed_kinds = [30931, 30932, 30933, 30934, 30935]
 
 [output]
 websocket_enabled = true

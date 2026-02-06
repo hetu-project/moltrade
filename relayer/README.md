@@ -111,7 +111,7 @@ Config snippet:
 
 ```toml
 [filters]
-allowed_kinds = [30931, 30932, 30933, 30934]
+allowed_kinds = [30931, 30932, 30933, 30934, 30935]
 
 [postgres]
 dsn = "postgres://postgres:postgres@localhost:5432/moltrade"

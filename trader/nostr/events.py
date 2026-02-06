@@ -17,8 +17,9 @@ from pynostr.event import Event
 # Kind reservations for trading bot events
 TRADE_SIGNAL_KIND = 30931
 COPYTRADE_INTENT_KIND = 30932
-EXECUTION_REPORT_KIND = 30933
-HEARTBEAT_KIND = 30934
+HEARTBEAT_KIND = 30933
+EXECUTION_REPORT_KIND = 30934
+AGENT_REGISTER_KIND = 30935
 
 DEFAULT_VERSION = "v1"
 
@@ -87,7 +88,16 @@ class ExecutionReportPayload:
     pnl: Optional[float] = None
     pnl_percent: Optional[float] = None
     test_mode: bool = False
+    account: Optional[str] = None
     note: Optional[str] = None
+
+
+@dataclass
+class AgentRegisterPayload:
+    bot_pubkey: str
+    nostr_pubkey: str
+    eth_address: str
+    name: str
 
 
 @dataclass
@@ -193,20 +203,46 @@ class HeartbeatEvent(BotEvent):
         return cls(kind=cls.KIND, content=json_content, sid=sid, tags=tags)
 
 
+class AgentRegisterEvent(BotEvent):
+    """Plaintext agent registration event so the relayer can auto-upsert the bot."""
+
+    KIND = AGENT_REGISTER_KIND
+    OP = "agent_register"
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        sid: str,
+        content: AgentRegisterPayload,
+    ) -> "AgentRegisterEvent":
+        json_content = _compact_json(asdict(content))
+        tags: List[List[str]] = [
+            ["op", cls.OP],
+            ["p", content.nostr_pubkey],
+            ["eth", content.eth_address],
+            ["name", content.name],
+        ]
+        return cls(kind=cls.KIND, content=json_content, sid=sid, tags=tags)
+
+
 __all__ = [
     "BotEvent",
     "TradeSignalEvent",
     "CopyTradeIntentEvent",
     "ExecutionReportEvent",
     "HeartbeatEvent",
+    "AgentRegisterEvent",
     "TradeSignalPayload",
     "CopyTradeIntentPayload",
     "ExecutionReportPayload",
     "HeartbeatPayload",
+    "AgentRegisterPayload",
     "TRADE_SIGNAL_KIND",
     "COPYTRADE_INTENT_KIND",
     "EXECUTION_REPORT_KIND",
     "HEARTBEAT_KIND",
+    "AGENT_REGISTER_KIND",
 ]
 
 

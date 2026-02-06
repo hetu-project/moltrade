@@ -17,7 +17,7 @@ Paths are repo-root relative. Keep actions deterministic and redact secrets.
 
 - Read `trader/config.example.json` or `config.json` if present.
 - Summarize `trading` (exchange/default_strategy/sizing/stops), `risk_management`, `nostr`, `telegram`.
-- Do not log keys; redact `wallet_address`, `private_key`, `nostr.nsec`, `platform_shared_key`.
+- Do not log keys; redact `wallet_address`, `private_key`, `nostr.nsec`, `nostr.relayer_nostr_pubkey`.
 
 ## Update Config Safely
 
@@ -39,7 +39,7 @@ Paths are repo-root relative. Keep actions deterministic and redact secrets.
 
 ## Broadcast Signals to Nostr
 
-- Check `nostr` block: `nsec`, `platform_shared_key`, `relays`, `sid`.
+- Check `nostr` block: `nsec`, `relayer_nostr_pubkey`, `relays`, `sid`.
 - `SignalBroadcaster` is wired in `main.py`. In test mode, verify `send_trade_signal` / `send_execution_report` run without errors.
 
 ## Add Exchange Adapter
