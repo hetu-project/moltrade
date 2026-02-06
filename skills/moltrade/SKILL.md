@@ -13,11 +13,14 @@ metadata:
 
 Paths are repo-root relative. Keep actions deterministic and redact secrets.
 
-## Inspect Config
+## Install & Init
 
-- Read `trader/config.example.json` or `config.json` if present.
-- Summarize `trading` (exchange/default_strategy/sizing/stops), `risk_management`, `nostr`, `telegram`.
-- Do not log keys; redact `wallet_address`, `private_key`, `nostr.nsec`, `nostr.relayer_nostr_pubkey`.
+- Clone the repo and install Python deps locally (code is required for strategies, nostr, and CLI):
+  - `git clone https://github.com/hetu-project/moltrade.git`
+  - `cd moltrade/trader && pip install -r requirements.txt`
+- Initialize a fresh config with the built-in wizard (no trading):
+  - `python main.py --init` (prompts for relayer URL, wallet, nostr, copy-trade follower defaults, and optional bot registration)
+- For CI/agents, keep using the repo checkout; there is no separate pip package/CLI yet.
 
 ## Update Config Safely
 
@@ -33,7 +36,7 @@ Paths are repo-root relative. Keep actions deterministic and redact secrets.
 
 ## Start Bot (test mode)
 
-- Ensure `config.json` exists and `trading.exchange` set (default hyperliquid).
+- Ensure `config.json` exists (run `python main.py --init` if not) and `trading.exchange` set (default hyperliquid).
 - Command: `python trader/main.py --config config.json --test --strategy <name> --symbol <symbol> --interval 300`.
 - Watch `trading_bot.log`; never switch to live without explicit user approval.
 

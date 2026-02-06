@@ -1,6 +1,6 @@
 # Relayer config for docker-compose
 [relay]
-bootstrap_relays = ["ws://62.72.41.239:8000"]
+bootstrap_relays = ["wss://nostr.parallel.hetu.org:8443"]
 max_connections = 10_000
 health_check_interval = 30
 
