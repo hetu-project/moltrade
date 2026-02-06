@@ -34,7 +34,7 @@
 - **OpenClaw Strategy Advisor**: Integrates OpenClaw as an advisory tool for automated backtests and improvement suggestions; users decide whether to adopt recommended changes.
 - **Local Hot-Reload of Profitable Strategies**: Strategy code and parameters can be iterated locally and take effect immediately, so performance improvements are under user control.
 - **Cloud Can Be Decentralized Relayer Network**: The lightweight relay architecture allows future migration to decentralized relay networks, reducing single points of failure and improving censorship resistance.
-- **Unified Incentive (Credit) System**: A transparent, verifiable Credit mechanism rewards all participants (signal providers, followers, relay nodes), aligning incentives across the ecosystem. 
+- **Unified Incentive (Credit) System**: A transparent, verifiable Credit mechanism rewards all participants (signal providers, followers, relay nodes), aligning incentives across the ecosystem.
 
 ## **How It Works (Simplified Flow)**
 
@@ -84,28 +84,45 @@
 
 1.  **Clone & Install**:
     ```bash
-    git clone https://your-repo-url/moltrade-bot.git
-    cd moltrade-bot
+    git clone https://github.com/hetu-project/moltrade.git
+    cd moltrade/trader
     pip install -r requirements.txt  # Installs nostr, hyperliquid-py, etc.
     ```
-2.  **Configure Your Secrets**:
-    - Copy `config.example.json` to `config.json`.
-    - **Fill in your Hyperliquid account details (API keys and wallet)**.
-    - **Important**: Never commit this file or share your private keys.
-3.  **Run the Bot**:
+2.  **Initialize Configuration**:
+
     ```bash
-    python main.py
+    python main.py --init
     ```
+
+    This generates `config.json` with prompts for your Hyperliquid API keys and wallet details.
+    **Important**: Never commit this file or share your private keys.
+
+3.  **Test on Testnet**:
+
+    ```bash
+    python main.py --config config.json --test --strategy test --symbol HYPE
+    ```
+
+    Verify configuration and strategy behavior without real trades.
+
+4.  **Run Live Trading**:
+    Once confident in your setup, switch to mainnet:
+    ```bash
+    python main.py --config config.json --strategy momentum --symbol HYPE
+    ```
+    ⚠️ **Ensure API keys, risk settings, and strategy parameters are correct before live trading.**
     The bot will start, generate a Nostr key pair for communication, and await configuration via its local API or admin panel.
 
 ## **Docker Setup**
 
 **For Relayer:**
+
 ```bash
 cd docker && docker compose -f docker-compose.relayer.yml up --build
 ```
 
 **For Trader:**
+
 ```bash
 cd docker && docker compose -f docker-compose.trader.yml up
 ```
