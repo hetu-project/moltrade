@@ -1,4 +1,5 @@
-FROM rust:1.89.0 as builder
+# Keep build and runtime on the same Debian release to avoid GLIBC mismatches
+FROM rust:1.89.0-bookworm as builder
 WORKDIR /app
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
