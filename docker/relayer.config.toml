@@ -14,7 +14,8 @@ rocksdb_path = "./data/rocksdb"
 allowed_kinds = [30931, 30932, 30933, 30934, 30935]
 
 [output]
-websocket_enabled = true
+websocket_enabled = false
+bind_address = "127.0.0.1"
 websocket_port = 8080
 batch_size = 100
 max_latency_ms = 50

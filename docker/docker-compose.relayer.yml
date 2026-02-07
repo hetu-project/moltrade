@@ -26,7 +26,7 @@ services:
     environment:
       RUST_LOG: moltrade_relayer=info
     volumes:
-      - ./relayer.config.toml:/etc/moltrade-relayer/config.toml:ro
+      - ./relayer.config.toml:/etc/moltrade-relayer/config.toml
     ports:
       - "8080:8080"  # REST + WebSocket
       - "9090:9090"  # Prometheus metrics
