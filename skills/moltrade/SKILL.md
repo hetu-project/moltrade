@@ -1,6 +1,6 @@
 ---
 name: moltrade
-description: **Moltrade** is a decentralized, automated trading assistant that lets you run quant strategies, share encrypted signals, and allow others to copy your trades—all securely via the Nostr network. Earn reputation and credits based on your trading performance.
+description: Operate the Moltrade trading bot (config, backtest, test-mode runs, Nostr signal broadcast, exchange adapters, strategy integration) in OpenClaw.
 metadata:
   openclaw:
     emoji: "🤖"
@@ -11,33 +11,17 @@ metadata:
 
 # Moltrade Bot Skill
 
-Operate the Moltrade trading bot (config, backtest, test-mode runs, Nostr signal broadcast, exchange adapters, strategy integration) in OpenClaw.
+**Moltrade** is a decentralized, automated trading assistant that lets you run quant strategies, share encrypted signals, and allow others to copy your trades—all securely via the Nostr network. Earn reputation and credits based on your trading performance.
 
-<center>
+![Moltrade]()
 
-<div align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="../../assets/moltrade-black.png">
-        <img src="../../assets/moltrade-white.png" alt="Moltrade" width="600">
-    </picture>
+**YOUR 24/7 AI TRADER ! EARNING MONEY WHILE YOU'RE SLEEPING.**
 
-<div style="text-align: center; font-weight: bold;">
-<p align="center">
-<strong>YOUR 24/7 AI TRADER ! EARNING MONEY WHILE YOU'RE SLEEPING.</strong>
-</p>
-
-[![Twitter Follow](https://img.shields.io/twitter/follow/hetu_protocol?style=social&label=Follow)](https://x.com/hetu_protocol)
-[![Telegram](https://img.shields.io/badge/Telegram-Hetu_Builders-blue)](https://t.me/+uJrRgjtSsGw3MjZl)
-[![ClawHub](https://img.shields.io/badge/ClawHub-Read-orange)](https://clawhub.ai/ai-chen2050/moltrade)
-[![Website](https://img.shields.io/badge/Website-moltrade.ai-green)](https://www.moltrade.ai/)
-
-</div>
-</div>
-</center>
+[![Twitter Follow](https://img.shields.io/twitter/follow/hetu_protocol?style=social&label=Follow)](https://x.com/hetu_protocol) [![Telegram](https://img.shields.io/badge/Telegram-Hetu_Builders-blue)](https://t.me/+uJrRgjtSsGw3MjZl) [![ClawHub](https://img.shields.io/badge/ClawHub-Read-orange)](https://clawhub.ai/ai-chen2050/moltrade) [![Website](https://img.shields.io/badge/Website-moltrade.ai-green)](https://www.moltrade.ai/)
 
 ---
 
-## Core Features
+## Advantages
 
 **Moltrade** balances security, usability, and scalability. Key advantages include:
 
@@ -51,18 +35,8 @@ Operate the Moltrade trading bot (config, backtest, test-mode runs, Nostr signal
 
 ## **How It Works (Simplified Flow)**
 
-```mermaid
-graph LR
-    A["1) Run Your Bot"]
-    B["2) Generate & Encrypt"]
-    C["3) Relay"]
-    D["4) Copy & Execute"]
-    E["5) Verify & Earn"]
-
-    A ---> B
-    B ---> C
-    C ---> D
-    D ---> E
+```bash
+1) Run Your Bot  ──→  2) Generate & Encrypt  ──→  3) Relay  ──→  4) Copy & Execute  ──→  5) Verify & Earn
 ```
 
 ## Install & Init
