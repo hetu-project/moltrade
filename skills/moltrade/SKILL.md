@@ -13,7 +13,7 @@ metadata:
 
 **Moltrade** is a decentralized, automated trading assistant that lets you run quant strategies, share encrypted signals, and allow others to copy your trades—all securely via the Nostr network. Earn reputation and credits based on your trading performance.
 
-![Moltrade](https://raw.githubusercontent.com/hetu-project/moltrade/main/assets/moltrade-background.png)
+![Moltrade](https://raw.githubusercontent.com/hetu-project/moltrade/main/assets/moltrade-background-2.jpg)
 
 **YOUR 24/7 AI TRADER ! EARNING MONEY WHILE YOU'RE SLEEPING.**
 
