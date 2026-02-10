@@ -383,7 +383,8 @@ impl EventRouter {
         // Followers for this bot
 
         // Persist trade tx info if present in payload
-        self.maybe_record_trade(subs, &bot.bot_pubkey, &plaintext)
+        let event_id = event.id.to_hex();
+        self.maybe_record_trade(subs, &bot.bot_pubkey, &plaintext, &event_id)
             .await;
         let followers = subs.list_subscriptions(&bot.bot_pubkey).await?;
         if followers.is_empty() {
@@ -502,7 +503,8 @@ impl EventRouter {
             None => return Ok(()),
         };
 
-        self.maybe_record_trade(subs, &bot.bot_pubkey, plaintext)
+        let event_id = event.id.to_hex();
+        self.maybe_record_trade(subs, &bot.bot_pubkey, plaintext, &event_id)
             .await;
         let followers = subs.list_subscriptions(&bot.bot_pubkey).await?;
         if followers.is_empty() {
@@ -609,16 +611,18 @@ impl EventRouter {
 
 #[derive(Debug)]
 struct TradeMeta {
-    tx_hash: String,
-    symbol: String,
-    side: String,
-    size: f64,
-    price: f64,
+    tx_hash: Option<String>,
+    oid: Option<String>,
+    symbol: Option<String>,
+    side: Option<String>,
+    size: Option<f64>,
+    price: Option<f64>,
     status: Option<String>,
     pnl: Option<f64>,
     pnl_usd: Option<f64>,
     follower_pubkey: Option<String>,
     role: String,
+    is_test: bool,
 }
 
 #[derive(Debug, Default)]
@@ -642,39 +646,45 @@ impl EventRouter {
         subs: &SubscriptionService,
         bot_pubkey: &str,
         plaintext: &str,
+        event_id: &str,
     ) {
         let meta = match extract_trade_meta(plaintext) {
             Some(m) => m,
             None => return,
         };
 
+        let oid_fallback = meta.oid.clone().or_else(|| Some(event_id.to_string()));
+
         if let Err(e) = subs
             .record_trade_tx(
                 bot_pubkey,
                 meta.follower_pubkey.as_deref(),
                 &meta.role,
-                &meta.symbol,
-                &meta.side,
-                meta.size,
-                meta.price,
-                &meta.tx_hash,
+                meta.symbol.as_deref().unwrap_or(""),
+                meta.side.as_deref().unwrap_or(""),
+                meta.size.unwrap_or(0.0),
+                meta.price.unwrap_or(0.0),
+                meta.tx_hash.as_deref(),
+                oid_fallback.as_deref(),
+                meta.is_test,
             )
             .await
         {
-            error!("Failed to record trade tx {}: {}", meta.tx_hash, e);
+            error!("Failed to record trade tx/oid: {}", e);
         }
 
         if meta.status.is_some() || meta.pnl.is_some() || meta.pnl_usd.is_some() {
             if let Err(e) = subs
                 .update_trade_settlement(
-                    &meta.tx_hash,
+                    meta.tx_hash.as_deref(),
+                    oid_fallback.as_deref(),
                     meta.status.as_deref().unwrap_or("pending"),
                     meta.pnl,
                     meta.pnl_usd,
                 )
                 .await
             {
-                error!("Failed to update settlement for {}: {}", meta.tx_hash, e);
+                error!("Failed to update settlement for trade: {}", e);
             }
         }
     }
@@ -682,16 +692,39 @@ impl EventRouter {
 
 fn extract_trade_meta(plaintext: &str) -> Option<TradeMeta> {
     let parsed: Value = serde_json::from_str(plaintext).ok()?;
-    let tx_hash = parsed.get("tx_hash")?.as_str()?.to_string();
-    let symbol = parsed.get("symbol")?.as_str()?.to_string();
-    let side = parsed.get("side")?.as_str()?.to_string();
-    let size = parsed.get("size")?.as_f64()?;
-    let price = parsed.get("price")?.as_f64()?;
+    let tx_hash = parsed
+        .get("tx_hash")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let oid = parsed
+        .get("oid")
+        .or_else(|| parsed.get("order_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let symbol = parsed
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let side = parsed
+        .get("side")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let size = parsed.get("size").and_then(|v| v.as_f64());
+    let price = parsed.get("price").and_then(|v| v.as_f64());
 
     let status = parsed
         .get("status")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let is_test = parsed
+        .get("test_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || parsed
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|s| s.eq_ignore_ascii_case("simulated"))
+            .unwrap_or(false);
     let pnl = parsed.get("pnl").and_then(|v| v.as_f64());
     let pnl_usd = parsed.get("pnl_usd").and_then(|v| v.as_f64());
     let follower_pubkey = parsed
@@ -705,8 +738,13 @@ fn extract_trade_meta(plaintext: &str) -> Option<TradeMeta> {
         .unwrap_or("leader")
         .to_string();
 
+    if tx_hash.is_none() && oid.is_none() {
+        return None;
+    }
+
     Some(TradeMeta {
         tx_hash,
+        oid,
         symbol,
         side,
         size,
@@ -716,6 +754,7 @@ fn extract_trade_meta(plaintext: &str) -> Option<TradeMeta> {
         pnl_usd,
         follower_pubkey,
         role,
+        is_test,
     })
 }
 

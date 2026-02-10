@@ -42,6 +42,7 @@ follower_rate = 0.001
 leader_rate = 0.002
 min_credit = 0.5
 profit_multiplier = 1.2
+test_multiplier = 0.1
 
 [subscriptions]
 daily_limit = 1000

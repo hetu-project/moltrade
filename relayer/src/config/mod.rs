@@ -89,6 +89,8 @@ pub struct SettlementCreditConfig {
     pub min_credit: f64,
     #[serde(default = "default_profit_multiplier")]
     pub profit_multiplier: f64,
+    #[serde(default = "default_test_multiplier")]
+    pub test_multiplier: f64,
     #[serde(default = "default_credit_enable")]
     pub enable: bool,
 }
@@ -119,6 +121,10 @@ fn default_min_credit() -> f64 {
 
 fn default_profit_multiplier() -> f64 {
     1.2
+}
+
+fn default_test_multiplier() -> f64 {
+    0.1
 }
 
 fn default_credit_enable() -> bool {

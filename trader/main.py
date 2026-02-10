@@ -481,17 +481,25 @@ class TradingBot:
                 )
 
             if getattr(self, "signal_broadcaster", None) and self.signal_broadcaster.enabled:
+                oid = None
+                if isinstance(order, dict):
+                    try:
+                        oid = order.get('response', {}).get('data', {}).get('statuses', [{}])[0].get('resting', {}).get('oid')
+                    except Exception:
+                        oid = None
+
                 self.signal_broadcaster.send_execution_report(
                     symbol=symbol,
                     side='long' if is_buy else 'short',
                     size=trade_size,
                     price=signal['price'],
                     status='submitted',
-                    tx_hash=order.get('status') if isinstance(order, dict) else None,
+                    tx_hash=None,
                     pnl=None,
                     pnl_percent=None,
                     test_mode=False,
                     account=self.config.get('wallet_address'),
+                    note=f"oid={oid}" if oid else None,
                 )
 
             # Record trade

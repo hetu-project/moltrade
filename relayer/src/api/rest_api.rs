@@ -254,12 +254,14 @@ struct RecordTradeRequest {
     side: String,
     size: f64,
     price: f64,
-    tx_hash: String,
+    tx_hash: Option<String>,
+    oid: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UpdateSettlementRequest {
-    tx_hash: String,
+    tx_hash: Option<String>,
+    oid: Option<String>,
     status: String,
     pnl: Option<f64>,
     pnl_usd: Option<f64>,
@@ -398,7 +400,9 @@ async fn record_trade(
         &payload.side,
         payload.size,
         payload.price,
-        &payload.tx_hash,
+        payload.tx_hash.as_deref(),
+        payload.oid.as_deref(),
+        false,
     )
     .await
     .map_err(|e| {
@@ -412,7 +416,7 @@ async fn record_trade(
                     return StatusCode::BAD_REQUEST;
                 }
                 if code == &SqlState::UNIQUE_VIOLATION {
-                    tracing::warn!("record_trade duplicate tx_hash: {}", db_err);
+                    tracing::warn!("record_trade duplicate tx_hash/oid: {}", db_err);
                     return StatusCode::OK; // idempotent insert
                 }
             }
@@ -443,7 +447,8 @@ async fn update_trade_settlement(
     }
 
     svc.update_trade_settlement(
-        &payload.tx_hash,
+        payload.tx_hash.as_deref(),
+        payload.oid.as_deref(),
         &payload.status,
         payload.pnl,
         payload.pnl_usd,

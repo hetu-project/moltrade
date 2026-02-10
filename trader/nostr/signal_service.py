@@ -219,6 +219,7 @@ class SignalBroadcaster:
         test_mode: bool,
         account: Optional[str] = None,
         note: Optional[str] = None,
+        oid: Optional[str] = None,
     ) -> bool:
         if not self.enabled:
             return False
@@ -234,7 +235,7 @@ class SignalBroadcaster:
             pnl_percent=pnl_percent,
             test_mode=test_mode,
             account=account,
-            note=note,
+            note=note or oid,
         )
         encrypted = self._encrypt(asdict(payload))
         if not encrypted:

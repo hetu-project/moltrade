@@ -55,10 +55,12 @@ impl SettlementWorker {
         }
 
         for t in trades {
-            match self.verify_tx(&t.tx_hash).await {
+            // Early-phase behavior: award credits as soon as we have an oid (tx hash may be absent for Hyperliquid).
+            // If tx_hash is present we still attempt verification; otherwise we short-circuit to credit award.
+            match self.verify_tx_opt(t.tx_hash.as_deref()).await {
                 Ok(Some(true)) => {
                     self.svc
-                        .update_trade_settlement(&t.tx_hash, "confirmed", None, None)
+                        .update_trade_settlement(t.tx_hash.as_deref(), t.oid.as_deref(), "confirmed", None, None)
                         .await?;
                     if let Some(credit) = self.compute_credit(&t) {
                         let recipient = t.follower_pubkey.as_deref().unwrap_or(&t.bot_pubkey);
@@ -66,19 +68,33 @@ impl SettlementWorker {
                             .award_credits(&t.bot_pubkey, recipient, credit)
                             .await?;
                     }
-                    info!("settlement: confirmed {}", t.tx_hash);
+                    info!("settlement: confirmed tx_hash={:?} oid={:?}", t.tx_hash, t.oid);
                 }
                 Ok(Some(false)) => {
                     self.svc
-                        .update_trade_settlement(&t.tx_hash, "failed", None, None)
+                        .update_trade_settlement(t.tx_hash.as_deref(), t.oid.as_deref(), "failed", None, None)
                         .await?;
-                    warn!("settlement: marked failed {}", t.tx_hash);
+                    warn!("settlement: marked failed tx_hash={:?} oid={:?}", t.tx_hash, t.oid);
                 }
                 Ok(None) => {
-                    debug!("settlement: tx {} not yet found", t.tx_hash);
+                    // If no tx hash, treat pending entry as immediately credit-eligible.
+                    if t.tx_hash.is_none() {
+                        if let Some(credit) = self.compute_credit(&t) {
+                            let recipient = t.follower_pubkey.as_deref().unwrap_or(&t.bot_pubkey);
+                            self.svc
+                                .award_credits(&t.bot_pubkey, recipient, credit)
+                                .await?;
+                        }
+                        self.svc
+                            .update_trade_settlement(t.tx_hash.as_deref(), t.oid.as_deref(), "confirmed", None, None)
+                            .await?;
+                        info!("settlement: credited pending trade with oid={:?}", t.oid);
+                    } else {
+                        debug!("settlement: tx {:?} not yet found", t.tx_hash);
+                    }
                 }
                 Err(e) => {
-                    error!("settlement: verify {} error: {}", t.tx_hash, e);
+                    error!("settlement: verify tx_hash={:?} oid={:?} error: {}", t.tx_hash, t.oid, e);
                 }
             }
         }
@@ -87,8 +103,12 @@ impl SettlementWorker {
     }
 
     /// Naive verifier: HTTP GET the explorer endpoint; 200 -> confirmed, 404 -> unknown
-    async fn verify_tx(&self, tx_hash: &str) -> Result<Option<bool>> {
-        let url = format!("{}/{}", self.base_url.trim_end_matches('/'), tx_hash);
+    async fn verify_tx_opt(&self, tx_hash: Option<&str>) -> Result<Option<bool>> {
+        let tx = match tx_hash {
+            Some(v) if !v.is_empty() => v,
+            _ => return Ok(None),
+        };
+        let url = format!("{}/{}", self.base_url.trim_end_matches('/'), tx);
         let resp = self.client.get(&url).send().await?;
         match resp.status() {
             StatusCode::OK => Ok(Some(true)),
@@ -104,17 +124,21 @@ impl SettlementWorker {
             _ => return None,
         };
 
-        let rate = if trade.role == "leader" {
+        let base_rate = if trade.role == "leader" {
             cfg.leader_rate
         } else {
             cfg.follower_rate
         };
 
-        let mut credit = (trade.size * trade.price * rate).max(cfg.min_credit);
+        let mut credit = (trade.size * trade.price * base_rate).max(cfg.min_credit);
         if let Some(pnl) = trade.pnl_usd {
             if pnl > 0.0 {
                 credit *= cfg.profit_multiplier;
             }
+        }
+
+        if trade.is_test {
+            credit *= cfg.test_multiplier;
         }
 
         if credit.is_finite() && credit > 0.0 {

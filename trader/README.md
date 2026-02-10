@@ -58,6 +58,12 @@ python main.py --config config.json --test --strategy momentum --symbol HYPE
 
 # Live trading (be sure keys/risks are set)
 python main.py --config config.json --strategy momentum --symbol HYPE
+
+# Copy-trade follower (mirrors leader signals only)
+python main.py --config config.json --test --strategy momentum --symbol HYPE --copytrade follower
+
+# Copy-trade leader (broadcasts signals; normal run)
+python main.py --config config.json --test --strategy momentum --symbol HYPE --copytrade leader
 ```
 
 ## Backtest

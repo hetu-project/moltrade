@@ -80,6 +80,10 @@ clawhub install moltrade
 - Command: `python trader/main.py --config config.json --strategy <name> --symbol <symbol>`.
 - Double-check keys, risk limits, and symbol before starting; live mode will place real orders.
 
+## Copy-trade Usage (live)
+
+- Follower (mirrors leader, no strategy trading): `python trader/main.py --config trader/config.json --strategy momentum --symbol HYPE --copytrade follower`
+
 ## Broadcast Signals to Nostr
 
 - Check `nostr` block: `nsec`, `relayer_nostr_pubkey`, `relays`, `sid`.

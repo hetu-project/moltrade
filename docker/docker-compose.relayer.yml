@@ -24,7 +24,9 @@ services:
         condition: service_healthy
     command: ["moltrade-relayer", "--config", "/etc/moltrade-relayer/config.toml"]
     environment:
-      RUST_LOG: moltrade_relayer=info
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      # RUST_LOG: moltrade_relayer=info
     volumes:
       - ./relayer.config.toml:/etc/moltrade-relayer/config.toml
     ports:

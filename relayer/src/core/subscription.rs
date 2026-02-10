@@ -33,13 +33,15 @@ pub struct BotRecord {
 
 #[derive(Debug, Clone)]
 pub struct PendingTrade {
-    pub tx_hash: String,
+    pub tx_hash: Option<String>,
+    pub oid: Option<String>,
     pub bot_pubkey: String,
     pub follower_pubkey: Option<String>,
     pub role: String,
     pub size: f64,
     pub price: f64,
     pub pnl_usd: Option<f64>,
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +156,9 @@ impl SubscriptionService {
                 ALTER TABLE trade_executions ALTER COLUMN price TYPE DOUBLE PRECISION USING price::double precision;
                 ALTER TABLE trade_executions ALTER COLUMN pnl TYPE DOUBLE PRECISION USING pnl::double precision;
                 ALTER TABLE trade_executions ALTER COLUMN pnl_usd TYPE DOUBLE PRECISION USING pnl_usd::double precision;
+                ALTER TABLE trade_executions ALTER COLUMN tx_hash DROP NOT NULL;
+                ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS oid TEXT UNIQUE;
+                ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
                 CREATE TABLE IF NOT EXISTS credits (
                     bot_pubkey TEXT NOT NULL REFERENCES bots(bot_pubkey) ON DELETE CASCADE,
                     follower_pubkey TEXT NOT NULL,
@@ -390,15 +395,17 @@ impl SubscriptionService {
         side: &str,
         size: f64,
         price: f64,
-        tx_hash: &str,
+        tx_hash: Option<&str>,
+        oid: Option<&str>,
+        is_test: bool,
     ) -> Result<()> {
         let client = self.pool.get().await.context("Failed to get PG client")?;
         client
             .execute(
-                "INSERT INTO trade_executions (bot_pubkey, follower_pubkey, role, symbol, side, size, price, tx_hash)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (tx_hash) DO NOTHING",
-                &[&bot_pubkey, &follower_pubkey, &role, &symbol, &side, &size, &price, &tx_hash],
+                "INSERT INTO trade_executions (bot_pubkey, follower_pubkey, role, symbol, side, size, price, tx_hash, oid, is_test)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 ON CONFLICT DO NOTHING",
+                &[&bot_pubkey, &follower_pubkey, &role, &symbol, &side, &size, &price, &tx_hash, &oid, &is_test],
             )
             .await
             .context("Failed to record trade tx")?;
@@ -408,11 +415,15 @@ impl SubscriptionService {
     /// Update trade settlement/PnL once the chain confirms
     pub async fn update_trade_settlement(
         &self,
-        tx_hash: &str,
+        tx_hash: Option<&str>,
+        oid: Option<&str>,
         status: &str,
         pnl: Option<f64>,
         pnl_usd: Option<f64>,
     ) -> Result<()> {
+        if tx_hash.is_none() && oid.is_none() {
+            return Ok(());
+        }
         let client = self.pool.get().await.context("Failed to get PG client")?;
         client
             .execute(
@@ -421,8 +432,9 @@ impl SubscriptionService {
                      pnl = COALESCE($3, pnl),
                      pnl_usd = COALESCE($4, pnl_usd),
                      updated_at = now()
-                 WHERE tx_hash = $1",
-                &[&tx_hash, &status, &pnl, &pnl_usd],
+                 WHERE ($1 IS NOT NULL AND tx_hash = $1)
+                    OR ($5 IS NOT NULL AND oid = $5)",
+                &[&tx_hash, &status, &pnl, &pnl_usd, &oid],
             )
             .await
             .context("Failed to update trade settlement")?;
@@ -433,7 +445,7 @@ impl SubscriptionService {
         let client = self.pool.get().await.context("Failed to get PG client")?;
         let rows = client
             .query(
-                "SELECT tx_hash, bot_pubkey, follower_pubkey, role, size, price, pnl_usd
+                "SELECT tx_hash, oid, bot_pubkey, follower_pubkey, role, size, price, pnl_usd, is_test
                  FROM trade_executions
                  WHERE status = 'pending'
                  ORDER BY created_at ASC
@@ -447,12 +459,14 @@ impl SubscriptionService {
             .into_iter()
             .map(|row| PendingTrade {
                 tx_hash: row.get(0),
-                bot_pubkey: row.get(1),
-                follower_pubkey: row.get(2),
-                role: row.get(3),
-                size: row.get(4),
-                price: row.get(5),
-                pnl_usd: row.get(6),
+                oid: row.get(1),
+                bot_pubkey: row.get(2),
+                follower_pubkey: row.get(3),
+                role: row.get(4),
+                size: row.get(5),
+                price: row.get(6),
+                pnl_usd: row.get(7),
+                is_test: row.get(8),
             })
             .collect())
     }
